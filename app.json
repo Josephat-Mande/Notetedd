@@ -9,8 +9,7 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-    "supportsTablet": true
-    
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
@@ -31,6 +30,8 @@
         {
           "image": "./assets/images/splash-icon.jpg",
           "imageWidth": 200,
+          "width": 1024,
+          "height": 800,
           "resizeMode": "contain",
           "backgroundColor": "#ffffff"
         }
@@ -43,6 +44,7 @@
       "eas": {
         "projectId": "cb848cbe-cd58-4190-b349-851f3bffb3ca"
       }
-    }
+    },
+    "owner": "mande"
   }
 }

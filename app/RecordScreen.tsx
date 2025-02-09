@@ -1,38 +1,35 @@
-import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform } from "react-native";
-import { Audio } from "expo-av";
-import axios from "axios";
-import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import * as FileSystem from "expo-file-system";
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert, Platform } from 'react-native';
+import { Audio } from 'expo-av';
+import * as FileSystem from 'expo-file-system';
+import * as SpeechSDK from 'microsoft-cognitiveservices-speech-sdk';
+import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
+import 'react-native-get-random-values';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const retryWithExponentialBackoff = async (fn, retries = 3, delayMs = 1000) => {
-  try {
-    return await fn();
-  } catch (error) {
-    if (retries === 0 || error.response?.status !== 429) {
-      throw error;
-    }
-    await delay(delayMs);
-    return retryWithExponentialBackoff(fn, retries - 1, delayMs * 2);
-  }
-};
+const AZURE_SUBSCRIPTION_KEY = '31233b70-ca48-4218-ac6e-875a68c3159e';
+const AZURE_REGION = 'eastus';
 
 export default function RecordScreen() {
   const [isRecording, setIsRecording] = useState(false);
   const [recording, setRecording] = useState(null);
-  const [transcription, setTranscription] = useState("");
+  const [transcription, setTranscription] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const apiKey = Constants.expoConfig.extra.OPENAI_API_KEY;
+  const speechConfig = SpeechSDK.SpeechConfig.fromSubscription(
+    AZURE_SUBSCRIPTION_KEY,
+    AZURE_REGION
+  );
 
-  // Start recording
   const startRecording = async () => {
     try {
+      // Clear previous transcription
+      setTranscription('');
+      await AsyncStorage.removeItem('latestTranscription');
+
       const { status } = await Audio.requestPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission Required", "Microphone access is required to record audio.");
+      if (status !== 'granted') {
+        Alert.alert('Permission Required', 'Microphone access is required to record audio.');
         return;
       }
 
@@ -48,101 +45,65 @@ export default function RecordScreen() {
       setRecording(recording);
       setIsRecording(true);
     } catch (error) {
-      console.error("Failed to start recording", error);
-      Alert.alert("Error", "Failed to start recording. Please try again.");
+      console.error('Failed to start recording', error);
+      Alert.alert('Error', 'Failed to start recording. Please try again.');
     }
   };
 
-  // Stop recording and transcribe audio
   const stopRecording = async () => {
     setIsRecording(false);
-
     try {
-      if (!recording) {
-        console.error("Recording is null");
-        return;
-      }
+      if (!recording) return;
 
       await recording.stopAndUnloadAsync();
       const uri = recording.getURI();
-      console.log("Recording URI:", uri);
-
-      // Convert to supported format (.wav)
-      const wavUri = await convertToWav(uri);
-
-      if (wavUri) {
-        await transcribeAudio(wavUri);
-      } else {
-        console.error("Failed to convert recording to .wav");
+      
+      const fileInfo = await FileSystem.getInfoAsync(uri);
+      if (!fileInfo.exists) {
+        throw new Error('File does not exist');
       }
+
+      await transcribeAudio(uri);
     } catch (error) {
-      console.error("Failed to stop recording", error);
-      Alert.alert("Error", "Failed to stop recording. Please try again.");
+      console.error('Failed to stop recording', error);
+      Alert.alert('Error', 'Failed to stop recording. Please try again.');
     }
   };
 
-  // Convert recorded audio to WAV format
-  const convertToWav = async (uri) => {
-    try {
-      if (Platform.OS === "web") {
-        const response = await fetch(uri);
-        const blob = await response.blob();
-        const wavBlob = new Blob([blob], { type: "audio/wav" });
-        return URL.createObjectURL(wavBlob);
-      } else {
-        const wavUri = uri.replace(".m4a", ".wav");
-        await FileSystem.moveAsync({ from: uri, to: wavUri });
-        return wavUri;
-      }
-    } catch (error) {
-      console.error("Error converting to WAV:", error);
-      return null;
-    }
-  };
-
-  // Transcribe audio using OpenAI Whisper API
   const transcribeAudio = async (audioUri) => {
     setIsLoading(true);
     try {
-      let file;
-      if (Platform.OS === "web") {
-        const response = await fetch(audioUri);
-        const blob = await response.blob();
-        file = new File([blob], "recording.wav", { type: "audio/wav" });
-      } else {
-        const fileInfo = await FileSystem.getInfoAsync(audioUri);
-        if (!fileInfo.exists) {
-          throw new Error("File does not exist");
-        }
-        file = {
-          uri: audioUri,
-          type: "audio/wav",
-          name: "recording.wav",
-        };
-      }
+      const audioFile = await FileSystem.readAsStringAsync(audioUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
 
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("model", "whisper-1");
+      const pushStream = SpeechSDK.AudioInputStream.createPushStream();
+      const audioBytes = Uint8Array.from(atob(audioFile), c => c.charCodeAt(0));
+      pushStream.write(audioBytes.buffer);
+      pushStream.close();
 
-      const response = await retryWithExponentialBackoff(async () => {
-        return axios.post(
-          "https://api.openai.com/v1/audio/transcriptions",
-          formData,
-          {
-            headers: {
-              Authorization: `Bearer ${apiKey}`, 
-              "Content-Type": "multipart/form-data",
-            },
-          }
+      const audioConfig = SpeechSDK.AudioConfig.fromStreamInput(pushStream);
+      const recognizer = new SpeechSDK.SpeechRecognizer(speechConfig, audioConfig);
+
+      const result = await new Promise((resolve, reject) => {
+        recognizer.recognizeOnceAsync(
+          result => resolve(result),
+          error => reject(error)
         );
       });
 
-      console.log("Transcription:", response.data.text);
-      setTranscription(response.data.text);
+      if (result.reason === SpeechSDK.ResultReason.RecognizedSpeech) {
+        const cleanTranscription = result.text.replace(/\s+/g, ' ').trim();
+        setTranscription(cleanTranscription);
+        await AsyncStorage.setItem('latestTranscription', cleanTranscription);
+      } else {
+        Alert.alert('Error', 'No speech could be recognized');
+      }
+
+      recognizer.close();
     } catch (error) {
-      console.error("Failed to transcribe audio:", error);
-      Alert.alert("Error", "Failed to transcribe the audio. Please try again.");
+      console.error('Transcription error:', error);
+      Alert.alert('Error', 'Failed to transcribe audio. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -155,41 +116,55 @@ export default function RecordScreen() {
       </View>
       <View style={styles.content}>
         <View style={styles.recordContainer}>
-          <View
-            style={[
-              styles.recordIconContainer,
-              isRecording ? styles.recording : styles.notRecording,
-            ]}
-          >
+          <View style={[
+            styles.recordIconContainer,
+            isRecording ? styles.recording : styles.notRecording
+          ]}>
             <MaterialIcons
               name="mic"
               size={48}
-              color={isRecording ? "red" : "gray"}
+              color={isRecording ? 'red' : 'gray'}
             />
           </View>
           <Text style={styles.recordStatus}>
-            {isRecording ? "Recording..." : "Ready to Record"}
+            {isRecording ? 'Recording...' : 'Ready to Record'}
           </Text>
           <View style={styles.buttonContainer}>
             {!isRecording ? (
-              <TouchableOpacity onPress={startRecording} style={styles.startButton}>
+              <TouchableOpacity 
+                onPress={startRecording} 
+                style={styles.startButton}
+                testID="start-recording-button"
+              >
                 <MaterialIcons name="mic" size={20} color="white" style={styles.icon} />
                 <Text style={styles.buttonText}>Start Recording</Text>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity onPress={stopRecording} style={styles.stopButton}>
+              <TouchableOpacity 
+                onPress={stopRecording} 
+                style={styles.stopButton}
+                testID="stop-recording-button"
+              >
                 <MaterialIcons name="stop" size={20} color="white" style={styles.icon} />
                 <Text style={styles.buttonText}>Stop</Text>
               </TouchableOpacity>
             )}
           </View>
         </View>
-        {isLoading ? (
-          <Text style={styles.loadingText}>Transcribing audio...</Text>
-        ) : transcription ? (
+        
+        {isLoading && (
+          <View style={styles.loadingContainer}>
+            <MaterialIcons name="hourglass-top" size={24} color="#9B5DE5" />
+            <Text style={styles.loadingText}>Processing audio...</Text>
+          </View>
+        )}
+
+        {transcription ? (
           <View style={styles.transcriptionContainer}>
-            <Text style={styles.transcriptionTitle}>Transcription</Text>
-            <Text style={styles.transcriptionText}>{transcription}</Text>
+            <Text style={styles.transcriptionTitle}>Raw Transcription Preview</Text>
+            <ScrollView style={styles.transcriptionScroll}>
+              <Text style={styles.transcriptionText}>{transcription}</Text>
+            </ScrollView>
           </View>
         ) : null}
       </View>
@@ -200,34 +175,34 @@ export default function RecordScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#F8FAFC",
+    backgroundColor: '#F8FAFC',
     paddingBottom: 20,
   },
   header: {
-    backgroundColor: "#9B5DE5",
+    backgroundColor: '#9B5DE5',
     padding: 24,
     borderBottomLeftRadius: 24,
     borderBottomRightRadius: 24,
-    alignItems: "center",
+    alignItems: 'center',
   },
   headerText: {
     fontSize: 24,
-    fontWeight: "bold",
-    color: "#FFFFFF",
+    fontWeight: 'bold',
+    color: '#FFFFFF',
   },
   content: {
     padding: 24,
     flex: 1,
-    alignItems: "center",
+    alignItems: 'center',
   },
   recordContainer: {
-    width: "100%",
+    width: '100%',
     maxWidth: 400,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: '#FFFFFF',
     borderRadius: 24,
     padding: 16,
-    alignItems: "center",
-    shadowColor: "#000",
+    alignItems: 'center',
+    shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowRadius: 8,
     shadowOffset: { width: 0, height: 4 },
@@ -238,67 +213,67 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    justifyContent: "center",
-    alignItems: "center",
+    justifyContent: 'center',
+    alignItems: 'center',
     marginBottom: 16,
   },
   recording: {
-    backgroundColor: "#FFE5E5",
+    backgroundColor: '#FFE5E5',
     transform: [{ scale: 1.1 }],
   },
   notRecording: {
-    backgroundColor: "#E5E5E5",
+    backgroundColor: '#E5E5E5',
   },
   recordStatus: {
     fontSize: 20,
-    fontWeight: "600",
-    color: "#1F2937",
+    fontWeight: '600',
+    color: '#1F2937',
     marginBottom: 8,
   },
   buttonContainer: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    width: "100%",
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    width: '100%',
   },
   startButton: {
-    backgroundColor: "#9B5DE5",
+    backgroundColor: '#9B5DE5',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   stopButton: {
-    backgroundColor: "#EF4444",
+    backgroundColor: '#EF4444',
     paddingVertical: 12,
     paddingHorizontal: 24,
     borderRadius: 8,
-    flexDirection: "row",
-    alignItems: "center",
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   icon: {
     marginRight: 8,
   },
   buttonText: {
-    color: "#FFFFFF",
+    color: '#FFFFFF',
     fontSize: 16,
-    fontWeight: "600",
+    fontWeight: '600',
   },
   transcriptionContainer: {
-    width: "100%",
+    width: '100%',
     maxWidth: 400,
-    backgroundColor: "#FFFFFF",
+    backgroundColor: '#FFFFFF',
     borderRadius: 24,
     padding: 16,
     elevation: 5,
   },
   transcriptionTitle: {
     fontSize: 18,
-    fontWeight: "600",
+    fontWeight: '600',
     marginBottom: 8,
   },
   transcriptionText: {
     fontSize: 14,
-    color: "#1F2937",
+    color: '#1F2937',
   },
 });

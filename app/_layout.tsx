@@ -11,7 +11,7 @@ export default function Layout() {
   const pathname = usePathname() || "";
 
   // Define paths where the bottom navigation should be hidden.
-  const hiddenPaths = ["/SplashScreen", "/LoginScreen", "/AuthScreen"];
+  const hiddenPaths = ["/", "/LoginScreen", "/AuthScreen"];
 
   return (
     <View style={{ flex: 1, backgroundColor: "#F9FAFB" }}>

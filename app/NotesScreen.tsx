@@ -2,68 +2,111 @@ import React, { useEffect, useState } from "react";
 import { View, Text, ScrollView, StyleSheet } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import axios from "axios";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 export default function NotesScreen() {
   const [notes, setNotes] = useState([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Simulate fetching notes from an API or local storage
-    async function fetchNotes() {
+    async function fetchAndProcessTranscription() {
       try {
         setLoading(true);
+        
+        // 1. Get the latest transcription from storage
+        const savedTranscription = await AsyncStorage.getItem('latestTranscription');
+        
+        if (!savedTranscription) {
+          setNotes([]);
+          return;
+        }
 
-        // Fetch transcribed notes from your backend or an AI API
-        const response = await axios.post("https://api.openai.com/v1/completions", {
-          model: "gpt-4",
-          prompt: `
-            Refine and organize the following lecture transcription:
-            1. Filter out redundant or irrelevant content.
-            2. Organize the refined text into topics and subtopics.
-            Transcription: "The professor is discussing the importance of quantum mechanics in modern physics. Quantum entanglement is a fundamental phenomenon... (more transcription)."
-          `,
-          max_tokens: 1024,
-          temperature: 0.7,
-        }, {
-          headers: {
-            "Authorization": `Bearer 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`,
-            "Content-Type": "application/json",
+        // 2. Send to OpenAI for organization and refinement
+        const response = await axios.post(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            model: "gpt-4",
+            messages: [{
+              role: "user",
+              content: `Organize this lecture transcription into structured notes:
+              1. Remove filler words and repetitions
+              2. Group related concepts
+              3. Create sections with headings
+              4. Use bullet points for key ideas
+              
+              Transcription: ${savedTranscription}`
+            }],
+            temperature: 0.7,
+            max_tokens: 1000
           },
-        });
+          {
+            headers: {
+              "Authorization": `Bearer YOUR_OPENAI_API_KEY`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
 
-        // Simulated refined notes from GPT-4 API response
-        const organizedNotes = response.data.choices[0].text.split("\n").filter(line => line.trim() !== "");
-        setNotes(organizedNotes);
+        // 3. Process the AI response
+        const rawNotes = response.data.choices[0].message.content.split('\n');
+        const filteredNotes = rawNotes.filter(line => 
+          line.trim() !== '' && !line.match(/^(Section|Chapter|Part) [0-9]+:/i)
+        );
+
+        setNotes(filteredNotes);
       } catch (error) {
-        console.error("Error fetching notes:", error);
+        console.error("Error processing notes:", error);
+        setNotes([`Error: Could not process notes. ${error.message}`]);
       } finally {
         setLoading(false);
       }
     }
 
-    fetchNotes();
+    fetchAndProcessTranscription();
   }, []);
 
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.headerText}>Notes</Text>
+        <Text style={styles.headerText}>Organized Notes</Text>
       </View>
       <View style={styles.content}>
         {loading ? (
-          <Text style={styles.loadingText}>Fetching and organizing notes...</Text>
+          <View style={styles.loadingContainer}>
+            <MaterialIcons name="hourglass-top" size={24} color="#9B5DE5" />
+            <Text style={styles.loadingText}>Processing lecture content...</Text>
+          </View>
         ) : notes.length === 0 ? (
-          <View style={styles.noteContainer}>
-            <Text style={styles.noteText}>No notes available. Record a lecture to see notes here.</Text>
+          <View style={styles.emptyState}>
+            <MaterialIcons name="library-books" size={48} color="#9B5DE5" />
+            <Text style={styles.emptyText}>No lectures processed yet</Text>
           </View>
         ) : (
-          <ScrollView contentContainerStyle={styles.scrollContent}>
-            {notes.map((note, index) => (
-              <View key={index} style={styles.noteCard}>
-                <MaterialIcons name="note" size={20} color="#9B5DE5" style={styles.noteIcon} />
-                <Text style={styles.noteText}>{note}</Text>
-              </View>
-            ))}
+          <ScrollView contentContainerStyle={styles.scrollContainer}>
+            {notes.map((note, index) => {
+              const isHeading = note.match(/[A-Z][a-z]+:/) || note.endsWith(':');
+              return (
+                <View 
+                  key={index} 
+                  style={[
+                    styles.noteItem,
+                    isHeading && styles.sectionHeader
+                  ]}
+                >
+                  {isHeading ? (
+                    <MaterialIcons name="label" size={20} color="#9B5DE5" />
+                  ) : (
+                    <MaterialIcons name="chevron-right" size={20} color="#6B7280" />
+                  )}
+                  <Text style={[
+                    styles.noteText,
+                    isHeading && styles.headerText
+                  ]}>
+                    {note.replace(/^\d+\.\s*/, '')}
+                  </Text>
+                </View>
+              );
+            })}
           </ScrollView>
         )}
       </View>
@@ -75,7 +118,6 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F8FAFC",
-    paddingBottom: 20,
   },
   header: {
     backgroundColor: "#9B5DE5",
@@ -90,52 +132,58 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
   },
   content: {
-    padding: 24,
     flex: 1,
+    padding: 16,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
+    gap: 16,
   },
   loadingText: {
     fontSize: 16,
     color: "#6B7280",
   },
-  noteContainer: {
-    width: "100%",
-    maxWidth: 400,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 24,
-    padding: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 5,
+  emptyState: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
+    gap: 16,
   },
-  scrollContent: {
-    width: "100%",
-    alignItems: "center",
+  emptyText: {
+    fontSize: 18,
+    color: "#6B7280",
   },
-  noteCard: {
-    width: "100%",
-    maxWidth: 400,
-    backgroundColor: "#FFFFFF",
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: "#000",
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 3,
+  scrollContainer: {
+    paddingBottom: 32,
+  },
+  noteItem: {
     flexDirection: "row",
     alignItems: "flex-start",
+    gap: 12,
+    backgroundColor: "#FFFFFF",
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
   },
-  noteIcon: {
-    marginRight: 12,
-    marginTop: 2,
+  sectionHeader: {
+    backgroundColor: "#F3E8FF",
+    borderLeftWidth: 4,
+    borderLeftColor: "#9B5DE5",
   },
   noteText: {
     fontSize: 16,
     color: "#1F2937",
+    flexShrink: 1,
+  },
+  headerText: {
+    fontWeight: "600",
+    color: "#9B5DE5",
   },
 });
