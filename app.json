@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.notetedd.app"
     },
     "android": {
       "adaptiveIcon": {
@@ -42,7 +43,8 @@
     },
     "extra": {
       "eas": {
-        "projectId": "cb848cbe-cd58-4190-b349-851f3bffb3ca"
+        "projectId": "cb848cbe-cd58-4190-b349-851f3bffb3ca",
+        "GOOGLE_API_KEY": "process.env.GOOGLE_API_KEY"
       }
     },
     "owner": "mande"

@@ -5,6 +5,15 @@ module.exports = function (api) {
       ["babel-preset-expo", { jsxImportSource: "nativewind" }],
       "nativewind/babel",
     ],
-    // plugins: ['expo-router/babel'],
+    // plugins: [
+    //   "expo-router/babel", // ✅ Add this line for Expo Router
+    //   [
+    //     "inline-dotenv",
+    //     {
+    //       path: ".env", // ✅ Ensure correct .env file path
+    //       systemvars: true, // ✅ Allow system environment variables
+    //     },
+    //   ],
+    // ],
   };
 };

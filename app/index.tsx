@@ -38,7 +38,7 @@ export default function SplashScreen() {
             <Text style={styles.appName}>Note Tedd</Text>
 
             {/* Tagline */}
-            <Text style={styles.tagline}>Learning Redefined</Text>
+            <Text style={styles.tagline}>Learning Made Easier</Text>
 
             {/* Get Started Button */}
             <TouchableOpacity style={styles.button} onPress={handleGetStarted}>
