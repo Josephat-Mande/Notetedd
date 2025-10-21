@@ -4,6 +4,7 @@
     "slug": "Notetedd",
     "version": "1.0.0",
     "orientation": "portrait",
+    "assetBundlePatterns": ["**/*"],
     "icon": "./assets/images/icon.jpg",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
