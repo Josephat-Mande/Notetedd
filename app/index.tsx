@@ -21,7 +21,7 @@ export default function SplashScreen() {
   return (
     <View style={styles.container}>
       <ImageBackground
-        source={require("../assets/images/splash-bg.jpg")} // Replace with your image path
+        source={require("../public/splash-bg.jpg")} 
         style={styles.backgroundImage}
         resizeMode="cover"
         onLoad={() => setImageLoaded(true)}

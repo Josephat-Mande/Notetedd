@@ -155,7 +155,7 @@ export default function HomeScreen() {
 
   const recentLectures = [
     { 
-      title: "Introduction to Psychology", 
+      title: "Introduction to Economics", 
       duration: "45 mins", 
       date: "2 hours ago",
       progress: 85,

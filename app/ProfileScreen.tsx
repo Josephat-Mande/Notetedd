@@ -1,206 +1,687 @@
-// screens/ProfileScreen.js
-import React, { useEffect, useState } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
-  TextInput,
-  TouchableOpacity,
-  Alert,
-  ActivityIndicator,
   ScrollView,
+  TouchableOpacity,
+  TextInput,
+  Image,
+  Animated,
+  Alert,
+  Platform,
 } from "react-native";
-import {  Edit, Save } from "lucide-react"; // Using lucide icons
-import { MaterialIcons } from "@expo/vector-icons"; // Import MaterialIcons
-import { getAuth } from "firebase/auth";
+import { LinearGradient } from "expo-linear-gradient";
+import MaterialIcons from "react-native-vector-icons/MaterialIcons";
+import { getAuth, updateProfile } from "firebase/auth";
 import { getFirestore, doc, getDoc, updateDoc } from "firebase/firestore";
+import * as ImagePicker from "expo-image-picker";
+import haptics from "./utils/haptics";
 
-// Make sure Firebase is initialized in your project!
-const auth = getAuth();
-const db = getFirestore();
+export default function ProfileScreen({ navigation, route }) {
+  const theme = route?.params?.theme || "light";
+  const isDark = theme === "dark";
+  
+  const goBack = () => {
+    navigation.navigate("PreviousScreen");
+  }
+  const [isEditing, setIsEditing] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [profileData, setProfileData] = useState({
+    displayName: "",
+    email: "",
+    phone: "",
+    bio: "",
+    university: "",
+    major: "",
+    yearOfStudy: "",
+    photoURL: null,
+  });
+  
+  const [stats, setStats] = useState({
+    lecturesRecorded: 45,
+    notesCreated: 128,
+    quizzesCompleted: 32,
+    studyHours: 156,
+  });
 
-export default function ProfileScreen() {
-  const [userData, setUserData] = useState(null);
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState("");
-  const [plan, setPlan] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const slideAnim = useRef(new Animated.Value(30)).current;
+  const auth = getAuth();
+  const db = getFirestore();
 
-  // Fetch logged-in user details from Firestore
   useEffect(() => {
-    async function fetchUserData() {
-      try {
-        const currentUser = auth.currentUser;
-        if (currentUser) {
-          const docRef = doc(db, "users", currentUser.uid);
-          const docSnap = await getDoc(docRef);
-          if (docSnap.exists()) {
-            const data = docSnap.data();
-            setUserData(data);
-            setName(data.name || "");
-            setPlan(data.plan || "");
-          } else {
-            Alert.alert("No user data found!");
-          }
-        }
-      } catch (error) {
-        console.error("Error fetching user data: ", error);
-        Alert.alert("Error", "Could not fetch user data.");
-      } finally {
-        setLoading(false);
-      }
-    }
-    fetchUserData();
+    loadProfileData();
+    
+    Animated.parallel([
+      Animated.timing(fadeAnim, {
+        toValue: 1,
+        duration: 600,
+        useNativeDriver: true,
+      }),
+      Animated.spring(slideAnim, {
+        toValue: 0,
+        tension: 50,
+        friction: 8,
+        useNativeDriver: true,
+      }),
+    ]).start();
   }, []);
 
-  // Save updated user data to Firestore
-  const handleSave = async () => {
+  const loadProfileData = async () => {
+    const user = auth.currentUser;
+    if (user) {
+      try {
+        const docSnap = await getDoc(doc(db, "users", user.uid));
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setProfileData({
+            displayName: user.displayName || data.username || "",
+            email: user.email || "",
+            phone: data.phone || "",
+            bio: data.bio || "",
+            university: data.university || "",
+            major: data.major || "",
+            yearOfStudy: data.yearOfStudy || "",
+            photoURL: user.photoURL || data.photoURL || null,
+          });
+          setStats({
+            lecturesRecorded: data.lecturesRecorded || 45,
+            notesCreated: data.notesCreated || 128,
+            quizzesCompleted: data.quizzesCompleted || 32,
+            studyHours: data.studyHours || 156,
+          });
+        }
+      } catch (error) {
+        console.error("Error loading profile:", error);
+      }
+    }
+  };
+
+  const handleSaveProfile = async () => {
+    setLoading(true);
+    await haptics.impact("Medium");
+    
     try {
-      setLoading(true);
-      const currentUser = auth.currentUser;
-      if (currentUser) {
-        const userRef = doc(db, "users", currentUser.uid);
-        await updateDoc(userRef, {
-          name,
-          plan,
+      const user = auth.currentUser;
+      if (user) {
+        await updateProfile(user, {
+          displayName: profileData.displayName,
+          photoURL: profileData.photoURL,
         });
-        setUserData({ ...userData, name, plan });
-        setEditing(false);
-        Alert.alert("Success", "Profile updated successfully.");
+
+        await updateDoc(doc(db, "users", user.uid), {
+          username: profileData.displayName,
+          phone: profileData.phone,
+          bio: profileData.bio,
+          university: profileData.university,
+          major: profileData.major,
+          yearOfStudy: profileData.yearOfStudy,
+        });
+
+        await haptics.notification("Success");
+        Alert.alert("Success", "Profile updated successfully!");
+        setIsEditing(false);
       }
     } catch (error) {
-      console.error("Error updating user data: ", error);
-      Alert.alert("Error", "Could not update profile.");
+      await haptics.notification("Error");
+      Alert.alert("Error", "Failed to update profile. Please try again.");
     } finally {
       setLoading(false);
     }
   };
 
-  if (loading) {
-    return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#7c3aed" />
-      </View>
-    );
-  }
+  const pickImage = async () => {
+    await haptics.impact("Light");
+    
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission Required", "Please allow access to your photos.");
+      return;
+    }
 
-  // const toggleSidebar = () => {
-  //   setIsSidebarOpen((prev) => !prev);
-  // };
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled) {
+      setProfileData({ ...profileData, photoURL: result.assets[0].uri });
+    }
+  };
+
+  const getInitials = () => {
+    const name = profileData.displayName || "U";
+    const parts = name.split(" ");
+    if (parts.length >= 2) {
+      return (parts[0][0] + parts[1][0]).toUpperCase();
+    }
+    return name.substring(0, 2).toUpperCase();
+  };
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      {/* Sidebar Toggle (Hamburger Icon) */}
-              {/* <TouchableOpacity style={styles.sidebarToggle} onPress={toggleSidebar}>
-                <MaterialIcons name="menu" size={28} color="#fff" />
-              </TouchableOpacity> */}
-      <View style={styles.profileHeader}>
-        <MaterialIcons name="person" size={24} color="#fff" />
-        <Text style={styles.headerText}>My Profile</Text>
-      </View>
-      <View style={styles.profileForm}>
-        <Text style={styles.label}>Name:</Text>
-        <TextInput
-          style={[styles.input, !editing && styles.disabledInput]}
-          value={name}
-          editable={editing}
-          onChangeText={setName}
-          placeholder="Enter your name"
-        />
+    <View style={[styles.container, isDark && styles.containerDark]}>
+      {/* Header */}
+      <LinearGradient
+        colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
+        style={styles.header}
+      >
+        <TouchableOpacity 
+          style={styles.backButton} 
+          onPress={() => navigation.goBack()}
+        >
+          <MaterialIcons name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        
+        <Text style={styles.headerTitle}>My Profile</Text>
+        
+        <TouchableOpacity 
+          style={styles.editButton}
+          onPress={() => {
+            haptics.impact("Light");
+            setIsEditing(!isEditing);
+          }}
+        >
+          <MaterialIcons 
+            name={isEditing ? "close" : "edit"} 
+            size={24} 
+            color="#fff" 
+          />
+        </TouchableOpacity>
+      </LinearGradient>
 
-        <Text style={styles.label}>Plan:</Text>
-        <TextInput
-          style={[styles.input, !editing && styles.disabledInput]}
-          value={plan}
-          editable={editing}
-          onChangeText={setPlan}
-          placeholder="Enter your plan"
-        />
+      <ScrollView 
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <Animated.View
+          style={{
+            opacity: fadeAnim,
+            transform: [{ translateY: slideAnim }],
+          }}
+        >
+          {/* Profile Photo Section */}
+          <View style={styles.photoSection}>
+            <TouchableOpacity 
+              onPress={isEditing ? pickImage : null}
+              activeOpacity={isEditing ? 0.7 : 1}
+            >
+              {profileData.photoURL ? (
+                <Image 
+                  source={{ uri: profileData.photoURL }} 
+                  style={styles.profilePhoto}
+                />
+              ) : (
+                <LinearGradient
+                  colors={["#F59E0B", "#D97706"]}
+                  style={styles.profilePhoto}
+                >
+                  <Text style={styles.initialsText}>{getInitials()}</Text>
+                </LinearGradient>
+              )}
+              
+              {isEditing && (
+                <View style={styles.cameraIconContainer}>
+                  <MaterialIcons name="camera-alt" size={20} color="#fff" />
+                </View>
+              )}
+            </TouchableOpacity>
 
-        {editing ? (
-          <TouchableOpacity style={styles.saveButton} onPress={handleSave}>
-            <Save size={20} color="#fff" />
-            <Text style={styles.buttonText}> Save Changes</Text>
-          </TouchableOpacity>
-        ) : (
-          <TouchableOpacity
-            style={styles.editButton}
-            onPress={() => setEditing(true)}
-          >
-            <MaterialIcons name= "edit" size={20} color="#fff" />
-            <Text style={styles.buttonText}> Edit Profile</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-    </ScrollView>
+            {!isEditing && (
+              <View style={styles.badgeContainer}>
+                <LinearGradient
+                  colors={["#FFD700", "#FFA500"]}
+                  style={styles.premiumBadge}
+                >
+                  <MaterialIcons name="stars" size={16} color="#fff" />
+                  <Text style={styles.premiumText}>Premium Member</Text>
+                </LinearGradient>
+              </View>
+            )}
+          </View>
+
+          {/* Stats Cards */}
+          {!isEditing && (
+            <View style={styles.statsContainer}>
+              {[
+                { icon: "mic", label: "Lectures", value: stats.lecturesRecorded, color: "#9B5DE5" },
+                { icon: "note", label: "Notes", value: stats.notesCreated, color: "#10B981" },
+                { icon: "quiz", label: "Quizzes", value: stats.quizzesCompleted, color: "#F59E0B" },
+                { icon: "schedule", label: "Hours", value: stats.studyHours, color: "#EF4444" },
+              ].map((stat, index) => (
+                <View 
+                  key={index}
+                  style={[styles.statCard, isDark && styles.statCardDark]}
+                >
+                  <View style={[styles.statIcon, { backgroundColor: stat.color + "20" }]}>
+                    <MaterialIcons name={stat.icon} size={24} color={stat.color} />
+                  </View>
+                  <Text style={[styles.statValue, isDark && styles.textDark]}>
+                    {stat.value}
+                  </Text>
+                  <Text style={styles.statLabel}>{stat.label}</Text>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Profile Form */}
+          <View style={[styles.formContainer, isDark && styles.formContainerDark]}>
+            <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+              Personal Information
+            </Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Full Name
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="person" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.displayName}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, displayName: text })
+                  }
+                  editable={isEditing}
+                  placeholder="Enter your name"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Email Address
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="email" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.email}
+                  editable={false}
+                  placeholder="Email"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                />
+              </View>
+              <Text style={styles.helperText}>Email cannot be changed</Text>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Phone Number
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="phone" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.phone}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, phone: text })
+                  }
+                  editable={isEditing}
+                  placeholder="Enter phone number"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                  keyboardType="phone-pad"
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Bio
+              </Text>
+              <View style={[
+                styles.inputContainer, 
+                styles.textAreaContainer,
+                isDark && styles.inputContainerDark
+              ]}>
+                <TextInput
+                  style={[styles.textArea, isDark && styles.inputDark]}
+                  value={profileData.bio}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, bio: text })
+                  }
+                  editable={isEditing}
+                  placeholder="Tell us about yourself..."
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                  multiline
+                  numberOfLines={4}
+                />
+              </View>
+            </View>
+
+            <Text style={[styles.sectionTitle, isDark && styles.textDark, { marginTop: 24 }]}>
+              Academic Information
+            </Text>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                University
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="school" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.university}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, university: text })
+                  }
+                  editable={isEditing}
+                  placeholder="Enter university name"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Major / Field of Study
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="book" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.major}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, major: text })
+                  }
+                  editable={isEditing}
+                  placeholder="e.g., Computer Science"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                />
+              </View>
+            </View>
+
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Year of Study
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="event" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.yearOfStudy}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, yearOfStudy: text })
+                  }
+                  editable={isEditing}
+                  placeholder="e.g., 3rd Year"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                />
+              </View>
+            </View>
+
+            {isEditing && (
+              <TouchableOpacity
+                style={styles.saveButton}
+                onPress={handleSaveProfile}
+                disabled={loading}
+              >
+                <LinearGradient
+                  colors={["#10B981", "#059669"]}
+                  style={styles.saveButtonGradient}
+                >
+                  <MaterialIcons name="check" size={24} color="#fff" />
+                  <Text style={styles.saveButtonText}>
+                    {loading ? "Saving..." : "Save Changes"}
+                  </Text>
+                </LinearGradient>
+              </TouchableOpacity>
+            )}
+          </View>
+        </Animated.View>
+      </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  centered: { flex: 1, justifyContent: "center", alignItems: "center" },
   container: {
-    flexGrow: 1,
-    padding: 20,
-    backgroundColor: "#f9fafb",
+    flex: 1,
+    backgroundColor: "#F5F7FA",
   },
-  profileHeader: {
+  containerDark: {
+    backgroundColor: "#0F172A",
+  },
+  header: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: 20,
+    justifyContent: "space-between",
+    paddingTop: 60,
+    paddingBottom: 20,
+    paddingHorizontal: 20,
   },
-  headerText: {
-    fontSize: 24,
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  headerTitle: {
+    fontSize: 20,
     fontWeight: "bold",
-    marginLeft: 10,
-    color: "#7c3aed",
-  },
-  profileForm: {
-    backgroundColor: "#fff",
-    padding: 20,
-    borderRadius: 10,
-    elevation: 3,
-  },
-  label: {
-    fontSize: 16,
-    color: "#374151",
-    marginBottom: 6,
-  },
-  input: {
-    borderWidth: 1,
-    borderColor: "#d1d5db",
-    borderRadius: 6,
-    padding: 10,
-    marginBottom: 15,
-    backgroundColor: "#fff",
-  },
-  disabledInput: {
-    backgroundColor: "#e5e7eb",
+    color: "#fff",
   },
   editButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  content: {
+    flex: 1,
+  },
+  photoSection: {
+    alignItems: "center",
+    marginTop: -40,
+    marginBottom: 24,
+  },
+  profilePhoto: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    borderWidth: 4,
+    borderColor: "#fff",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  initialsText: {
+    fontSize: 40,
+    fontWeight: "bold",
+    color: "#fff",
+  },
+  cameraIconContainer: {
+    position: "absolute",
+    bottom: 0,
+    right: 0,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#9B5DE5",
+    justifyContent: "center",
+    alignItems: "center",
+    borderWidth: 3,
+    borderColor: "#fff",
+  },
+  badgeContainer: {
+    marginTop: 12,
+  },
+  premiumBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#7c3aed",
-    padding: 12,
-    borderRadius: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    gap: 6,
+  },
+  premiumText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  statsContainer: {
+    flexDirection: "row",
+    paddingHorizontal: 20,
+    marginBottom: 24,
+    gap: 12,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: "#fff",
+    borderRadius: 16,
+    padding: 16,
+    alignItems: "center",
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  statCardDark: {
+    backgroundColor: "#1F2937",
+  },
+  statIcon: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
     justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  statValue: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#1F2937",
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: "#6B7280",
+    fontWeight: "500",
+  },
+  formContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 24,
+    padding: 24,
+    marginHorizontal: 20,
+    marginBottom: 24,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+  },
+  formContainerDark: {
+    backgroundColor: "#1F2937",
+  },
+  sectionTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 20,
+  },
+  inputGroup: {
+    marginBottom: 20,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#374151",
+    marginBottom: 8,
+  },
+  inputContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  inputContainerDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
+  },
+  input: {
+    flex: 1,
+    paddingVertical: 14,
+    paddingHorizontal: 12,
+    fontSize: 15,
+    color: "#1F2937",
+  },
+  inputDark: {
+    color: "#F9FAFB",
+  },
+  textAreaContainer: {
+    alignItems: "flex-start",
+    paddingVertical: 12,
+  },
+  textArea: {
+    flex: 1,
+    width: "100%",
+    textAlignVertical: "top",
+    fontSize: 15,
+    color: "#1F2937",
+    minHeight: 80,
+  },
+  helperText: {
+    fontSize: 12,
+    color: "#9CA3AF",
+    marginTop: 4,
+    marginLeft: 4,
   },
   saveButton: {
+    marginTop: 24,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  saveButtonGradient: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#10b981",
-    padding: 12,
-    borderRadius: 6,
     justifyContent: "center",
+    paddingVertical: 16,
+    gap: 8,
   },
-  buttonText: {
+  saveButtonText: {
     color: "#fff",
     fontSize: 16,
+    fontWeight: "700",
   },
-  sidebarToggle: {
-    position: "absolute",
-    top: 40,
-    left: 20,
-    zIndex: 1,
+  textDark: {
+    color: "#F9FAFB",
+  },
+  textSecondaryDark: {
+    color: "#D1D5DB",
   },
 });
