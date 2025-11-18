@@ -5,10 +5,14 @@ import { Slot } from "expo-router/build";
 import Toast from "react-native-toast-message";
 
 import { createStackNavigator } from '@react-navigation/stack';
+import { NavigationContainer } from '@react-navigation/native';
+
 
 import HomeScreen from './HomeScreen';
 
 import ProfileScreen from './ProfileScreen';
+import RecordScreen from "./RecordScreen";
+import NotesScreen from "./NotesScreen";
 import PairedDevicesScreen from "./PairedDevicesScreen";
 import PrintNotesScreen from "./PrintNotesScreen";
 import ExportNotesScreen from "./ExportNotesScreen";
@@ -30,8 +34,11 @@ export default function App() {
       <Slot />
       
       <Toast/> {/* Toast message */}
+      <NavigationContainer>
       <Stack.Navigator initialRouteName="HomeScreen">
         <Stack.Screen name="HomeScreen" component={HomeScreen} />
+        <Stack.Screen name="RecordScreen" component={RecordScreen} />
+        <Stack.Screen name="NotesScreen" component={NotesScreen} />
         <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
         <Stack.Screen name="PairedDevicesScreen" component={PairedDevicesScreen} />
         <Stack.Screen name="SubscriptionPlanScreen" component={SubscriptionPlanScreen} />
@@ -47,6 +54,8 @@ export default function App() {
         
         {/* Add all other screens here */}
       </Stack.Navigator>
+      
+      </NavigationContainer>
        
     </div>
   );

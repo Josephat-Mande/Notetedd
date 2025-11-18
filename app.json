@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "assetBundlePatterns": ["**/*"],
-    "icon": "./assets/images/icon.jpg",
+    "icon": "./icon.jpg",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -15,7 +15,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./assets/images/adaptive-icon.jpg",
+        "foregroundImage": "./adaptive-icon.jpg",
         "backgroundColor": "#ffffff"
       },
       "package": "com.notetedd.app"
@@ -23,14 +23,14 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/favicon.jpg"
+      "favicon": "./favicon.jpg"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/splash-icon.jpg",
+          "image": "./splash-icon.jpg",
           "imageWidth": 200,
           "width": 1024,
           "height": 800,

@@ -1,64 +1,75 @@
 import React, { useState, useRef, useEffect } from "react";
-import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  StyleSheet, 
-  Alert, 
-  Platform,
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
   ScrollView,
+  Alert,
+  Platform,
   Animated,
   Dimensions,
+  Share,
+  Clipboard,
+  Switch,
 } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
 import { LinearGradient } from "expo-linear-gradient";
+import { useNavigation } from '@react-navigation/native';
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import haptics from "./utils/haptics"; // Import our safe haptics utility
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import haptics from "./utils/haptics";
+import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { getFirestore, collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { getAuth } from "firebase/auth";
 
 const { width } = Dimensions.get("window");
-const GOOGLE_API_KEY = "AIzaSyBRlIWgTdPEZDjV1RFLRoEts5cpciByJFM";
+
+// IMPORTANT: Replace with your actual AssemblyAI API key
+// Get your free API key at: https://www.assemblyai.com/
+const ASSEMBLYAI_API_KEY = "83b66f41846a49c19d62893c24e0ce34"; // <-- PASTE YOUR API KEY HERE (leave empty to use Web Speech only)
 
 const RECORDING_OPTIONS = {
   android: {
-    extension: ".amr",
-    outputFormat: Audio.AndroidOutputFormat.AMR_WB,
-    audioEncoder: Audio.AndroidAudioEncoder.AMR_WB,
-    sampleRate: 16000,
-    numberOfChannels: 1,
+    extension: ".m4a",
+    outputFormat: Audio.AndroidOutputFormat.MPEG_4,
+    audioEncoder: Audio.AndroidAudioEncoder.AAC,
+    sampleRate: 44100,
+    numberOfChannels: 2,
     bitRate: 128000,
   },
   ios: {
-    extension: ".wav",
+    extension: ".m4a",
+    outputFormat: Audio.IOSOutputFormat.MPEG4AAC,
     audioQuality: Audio.IOSAudioQuality.HIGH,
     sampleRate: 44100,
-    numberOfChannels: 1,
+    numberOfChannels: 2,
     bitRate: 128000,
-    linearPCMBitDepth: 16,
-    linearPCMIsBigEndian: false,
-    linearPCMIsFloat: false,
   },
   web: {
-    mimeType: Platform.select({
-      web: typeof navigator !== "undefined" && navigator.userAgent.includes("Safari")
-          ? "audio/mp4"
-          : "audio/webm",
-    }),
+    mimeType: "audio/webm",
     bitsPerSecond: 128000,
   },
 };
 
-export default function RecordScreen() {
+export default function RecordScreen({ route }) {
+  const theme = route?.params?.theme || "light";
+  const isDark = theme === "dark";
+  const navigation = useNavigation();
+  
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [transcription, setTranscription] = useState("");
-  const [permissionGranted, setPermissionGranted] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [isTranscribing, setIsTranscribing] = useState(false);
-  const [audioLevel, setAudioLevel] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const [recordingUri, setRecordingUri] = useState(null);
+  const [transcriptionMethod, setTranscriptionMethod] = useState("auto");
+  const [useWebSpeech, setUseWebSpeech] = useState(false);
   
-  const recordingRef = useRef(new Audio.Recording());
-  const [sampleRate, setSampleRate] = useState(null);
+  const recordingRef = useRef(null);
+  const webSpeechRef = useRef(null);
   const timerRef = useRef(null);
   
   // Animations
@@ -67,7 +78,17 @@ export default function RecordScreen() {
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(50)).current;
 
+  // Firebase instances
+  const auth = getAuth();
+  const storage = getStorage();
+  const db = getFirestore();
+
   useEffect(() => {
+    console.log("🎙️ RecordScreen mounted");
+    console.log("📱 Platform:", Platform.OS);
+    console.log("🔑 AssemblyAI Key configured:", !!ASSEMBLYAI_API_KEY && ASSEMBLYAI_API_KEY.length > 10);
+    console.log("🌐 Web Speech supported:", typeof window !== 'undefined' && 'webkitSpeechRecognition' in window);
+    
     // Entrance animation
     Animated.parallel([
       Animated.timing(fadeAnim, {
@@ -84,8 +105,12 @@ export default function RecordScreen() {
     ]).start();
 
     return () => {
+      console.log("🎙️ Cleanup...");
       if (recordingRef.current) {
         stopRecording().catch(console.error);
+      }
+      if (webSpeechRef.current) {
+        webSpeechRef.current.stop();
       }
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -165,163 +190,502 @@ export default function RecordScreen() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  const requestPermission = async () => {
+  const requestPermissions = async () => {
     try {
-      if (Platform.OS === "web") return true;
-
-      const { status } = await Audio.requestPermissionsAsync();
-      setPermissionGranted(status === "granted");
-      return status === "granted";
+      console.log("🎤 Requesting permissions...");
+      if (Platform.OS !== "web") {
+        const { status } = await Audio.requestPermissionsAsync();
+        console.log("🎤 Permission status:", status);
+        if (status !== "granted") {
+          Alert.alert(
+            "Permission Required",
+            "Microphone access is required to record lectures."
+          );
+          return false;
+        }
+      }
+      console.log("✅ Permissions granted");
+      return true;
     } catch (error) {
-      console.error("Permission error:", error);
+      console.error("❌ Permission error:", error);
       return false;
     }
   };
 
+  // ==================== FIRESTORE SAVE ====================
+  const saveRecordingToFirestore = async (audioUri, transcriptionText, duration) => {
+    try {
+      console.log("💾 Saving to Firestore...");
+      setIsSaving(true);
+
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        throw new Error("User not authenticated. Please sign in first.");
+      }
+
+      console.log("👤 Current user:", currentUser.uid);
+
+      // Step 1: Upload audio file to Firebase Storage
+      console.log("📤 Uploading audio to Firebase Storage...");
+      let audioUrl = null;
+      
+      if (audioUri) {
+        try {
+          const fileName = `recordings/${currentUser.uid}/${Date.now()}.m4a`;
+          const storageRef = ref(storage, fileName);
+          
+          // Get the blob from URI
+          let blob;
+          if (Platform.OS === "web") {
+            const response = await fetch(audioUri);
+            blob = await response.blob();
+          } else {
+            // For mobile, read file as base64 and convert
+            const base64 = await FileSystem.readAsStringAsync(audioUri, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+            const byteCharacters = atob(base64);
+            const byteNumbers = new Array(byteCharacters.length);
+            for (let i = 0; i < byteCharacters.length; i++) {
+              byteNumbers[i] = byteCharacters.charCodeAt(i);
+            }
+            const byteArray = new Uint8Array(byteNumbers);
+            blob = new Blob([byteArray], { type: 'audio/m4a' });
+          }
+
+          // Upload to Storage
+          await uploadBytes(storageRef, blob);
+          audioUrl = await getDownloadURL(storageRef);
+          console.log("✅ Audio uploaded:", audioUrl);
+        } catch (uploadError) {
+          console.error("⚠️ Audio upload failed (continuing anyway):", uploadError);
+          // Continue even if audio upload fails - we still have transcription
+        }
+      }
+
+      // Step 2: Save metadata to Firestore
+      console.log("📝 Saving metadata to Firestore...");
+      const recordingData = {
+        userId: currentUser.uid,
+        userEmail: currentUser.email || "unknown",
+        audioUrl: audioUrl || null,
+        transcription: transcriptionText || "",
+        duration: duration || 0,
+        formattedDuration: formatDuration(duration || 0),
+        transcriptionMethod: useWebSpeech ? "Web Speech API" : "AssemblyAI",
+        createdAt: serverTimestamp(),
+        platform: Platform.OS,
+        title: `Recording ${new Date().toLocaleDateString()}`,
+        organizedNotes: null, // Will be populated by NotesScreen
+      };
+
+      console.log("📦 Data to save:", recordingData);
+
+      try {
+        const docRef = await addDoc(collection(db, "recordings"), recordingData);
+        console.log("✅ Recording saved with ID:", docRef.id);
+
+        // Also save to AsyncStorage as backup for offline access
+        await AsyncStorage.setItem('latestTranscription', transcriptionText || "");
+        console.log("✅ Saved to AsyncStorage backup");
+
+        await haptics.notification('Success');
+        Alert.alert(
+          "Success! 🎉",
+          "Recording and transcription saved successfully!",
+          [
+            {
+              text: "View Notes",
+              onPress: () => {
+                if (navigation?.navigate) {
+                  navigation.navigate("NotesScreen", { refresh: Date.now() });
+                }
+              },
+            },
+            { text: "OK" }
+          ]
+        );
+
+        return docRef.id;
+      } catch (firestoreError) {
+        console.error("❌ Firestore write error:", firestoreError);
+        throw new Error(`Firestore error: ${firestoreError.message}\n\n💡 Check your Firestore security rules!`);
+      }
+    } catch (error) {
+      console.error("❌ Firestore save error:", error);
+      Alert.alert(
+        "Save Error",
+        `Failed to save recording: ${error.message}\n\nThe transcription is still available on this screen.`,
+        [{ text: "OK" }]
+      );
+      // Don't throw - allow user to continue using the app
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  // ==================== WEB SPEECH API ====================
+  const startWebSpeechRecognition = () => {
+    console.log("🌐 Starting Web Speech recognition...");
+    
+    if (typeof window === 'undefined' || !('webkitSpeechRecognition' in window)) {
+      console.error("❌ Web Speech not supported");
+      Alert.alert('Not Supported', 'Please use Chrome, Edge, or Safari');
+      return false;
+    }
+
+    const SpeechRecognition = window.webkitSpeechRecognition;
+    const recognition = new SpeechRecognition();
+    
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.lang = 'en-US';
+    recognition.maxAlternatives = 1;
+
+    let finalTranscript = '';
+
+    recognition.onstart = () => {
+      console.log('✅ Web Speech started');
+    };
+
+    recognition.onresult = (event) => {
+      let interimTranscript = '';
+
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const transcript = event.results[i][0].transcript;
+        
+        if (event.results[i].isFinal) {
+          finalTranscript += transcript + ' ';
+          console.log('📝 Final:', transcript);
+        } else {
+          interimTranscript += transcript;
+        }
+      }
+
+      // Update transcription in real-time
+      const fullTranscript = finalTranscript + interimTranscript;
+      setTranscription(fullTranscript);
+    };
+
+    recognition.onerror = (event) => {
+      console.error('❌ Web Speech error:', event.error);
+      
+      if (event.error === 'no-speech') {
+        console.log('⚠️ No speech detected, continuing...');
+      } else if (event.error === 'not-allowed') {
+        Alert.alert('Permission Denied', 'Please allow microphone access');
+        stopRecording();
+      } else {
+        console.error('Error:', event.error);
+      }
+    };
+
+    recognition.onend = () => {
+      console.log('🏁 Web Speech ended');
+      if (isRecording) {
+        // Restart if still recording
+        recognition.start();
+      }
+    };
+
+    recognition.start();
+    webSpeechRef.current = recognition;
+    return true;
+  };
+
+  const stopWebSpeechRecognition = () => {
+    if (webSpeechRef.current) {
+      console.log("⏹️ Stopping Web Speech...");
+      webSpeechRef.current.stop();
+      webSpeechRef.current = null;
+    }
+  };
+
+  // ==================== ASSEMBLYAI TRANSCRIPTION ====================
+  const transcribeWithAssemblyAI = async (uri) => {
+    try {
+      console.log("🎯 Starting AssemblyAI transcription...");
+
+      // Validate API key
+      if (!ASSEMBLYAI_API_KEY || ASSEMBLYAI_API_KEY.length < 10) {
+        throw new Error("AssemblyAI API key not configured. Please add your API key at the top of RecordScreen.js or use Real-time Mode instead.");
+      }
+
+      // Step 1: Get audio blob
+      console.log("📤 Reading audio file...");
+      const response = await fetch(uri);
+      const blob = await response.blob();
+      console.log("📦 Blob size:", blob.size, "bytes");
+
+      if (blob.size === 0) {
+        throw new Error("Audio file is empty");
+      }
+
+      // Step 2: Upload to AssemblyAI
+      console.log("☁️ Uploading to AssemblyAI...");
+      const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
+        method: 'POST',
+        headers: {
+          'authorization': ASSEMBLYAI_API_KEY,
+        },
+        body: blob,
+      });
+
+      if (!uploadResponse.ok) {
+        const errorText = await uploadResponse.text();
+        console.error("Upload error response:", errorText);
+        throw new Error(`Upload failed: ${uploadResponse.status} - Check your API key`);
+      }
+
+      const uploadData = await uploadResponse.json();
+      console.log("✅ File uploaded:", uploadData.upload_url);
+
+      // Step 3: Request transcription
+      console.log("📋 Requesting transcription...");
+      const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
+        method: 'POST',
+        headers: {
+          'authorization': ASSEMBLYAI_API_KEY,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          audio_url: uploadData.upload_url,
+          punctuate: true,
+          format_text: true,
+          language_code: 'en_us',
+        }),
+      });
+
+      if (!transcriptResponse.ok) {
+        const errorText = await transcriptResponse.text();
+        console.error("Transcription request error:", errorText);
+        throw new Error(`Transcription request failed: ${transcriptResponse.status}`);
+      }
+
+      const transcriptData = await transcriptResponse.json();
+      console.log("🆔 Transcript ID:", transcriptData.id);
+
+      // Step 4: Poll for result
+      console.log("⏳ Polling for result...");
+      let transcript = null;
+      let attempts = 0;
+      const maxAttempts = 60; // 3 minutes max
+
+      while (attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+        
+        const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptData.id}`, {
+          headers: { 'authorization': ASSEMBLYAI_API_KEY },
+        });
+
+        if (!pollResponse.ok) {
+          throw new Error(`Poll request failed: ${pollResponse.status}`);
+        }
+
+        transcript = await pollResponse.json();
+        console.log("📊 Status:", transcript.status);
+
+        if (transcript.status === 'completed') {
+          console.log("✅ Transcription completed!");
+          return transcript.text;
+        } else if (transcript.status === 'error') {
+          throw new Error(`Transcription error: ${transcript.error}`);
+        }
+
+        attempts++;
+      }
+
+      throw new Error("Transcription timeout - please try again");
+    } catch (error) {
+      console.error("❌ AssemblyAI error:", error);
+      throw error;
+    }
+  };
+
+  // ==================== RECORDING CONTROLS ====================
   const startRecording = async () => {
     try {
+      console.log("▶️ Starting recording...");
       await haptics.impact('Medium');
       
+      const hasPermission = await requestPermissions();
+      if (!hasPermission) return;
+
+      // Start Web Speech if enabled
+      if (useWebSpeech && Platform.OS === "web") {
+        const webSpeechStarted = startWebSpeechRecognition();
+        if (!webSpeechStarted) {
+          Alert.alert(
+            "Web Speech Unavailable",
+            "Falling back to post-recording transcription"
+          );
+        }
+      }
+
+      // Start audio recording
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
       });
 
-      if (!(await requestPermission())) {
-        Alert.alert("Permission Required", "Microphone access is required.");
-        return;
-      }
+      const recording = new Audio.Recording();
+      await recording.prepareToRecordAsync({
+        ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        ...RECORDING_OPTIONS[Platform.OS],
+      });
 
-      const currentRecording = recordingRef.current;
-      const status = await currentRecording.getStatusAsync();
-
-      if (!status.canRecord) {
-        recordingRef.current = new Audio.Recording();
-        await recordingRef.current.prepareToRecordAsync({
-          ...Audio.RecordingOptionsPresets.HIGH_QUALITY,
-          ...RECORDING_OPTIONS[Platform.OS],
-        });
-      }
-
-      await recordingRef.current.startAsync();
+      await recording.startAsync();
+      recordingRef.current = recording;
       setIsRecording(true);
       setRecordingDuration(0);
+      if (!useWebSpeech) {
+        setTranscription("");
+      }
+      setRecordingUri(null);
+      console.log("✅ Recording started");
     } catch (error) {
-      console.error("Start recording failed:", error);
+      console.error("❌ Start recording failed:", error);
       Alert.alert("Error", "Failed to start recording. Please try again.");
     }
   };
 
   const pauseRecording = async () => {
     try {
+      console.log("⏸️ Pausing...");
       await haptics.impact('Light');
-      await recordingRef.current.pauseAsync();
-      setIsPaused(true);
+      
+      if (recordingRef.current) {
+        await recordingRef.current.pauseAsync();
+        setIsPaused(true);
+      }
+      
+      if (webSpeechRef.current) {
+        webSpeechRef.current.stop();
+      }
+      
+      console.log("✅ Paused");
     } catch (error) {
-      console.error("Pause recording failed:", error);
+      console.error("❌ Pause failed:", error);
     }
   };
 
   const resumeRecording = async () => {
     try {
+      console.log("▶️ Resuming...");
       await haptics.impact('Light');
-      await recordingRef.current.startAsync();
-      setIsPaused(false);
+      
+      if (recordingRef.current) {
+        await recordingRef.current.startAsync();
+        setIsPaused(false);
+      }
+      
+      if (useWebSpeech && Platform.OS === "web") {
+        startWebSpeechRecognition();
+      }
+      
+      console.log("✅ Resumed");
     } catch (error) {
-      console.error("Resume recording failed:", error);
+      console.error("❌ Resume failed:", error);
     }
   };
 
   const stopRecording = async () => {
     try {
+      console.log("⏹️ Stopping...");
       await haptics.notification('Success');
       setIsRecording(false);
       setIsPaused(false);
+
+      // Stop Web Speech
+      stopWebSpeechRecognition();
+
+      if (!recordingRef.current) {
+        console.log("⚠️ No active recording");
+        return;
+      }
+
       await recordingRef.current.stopAndUnloadAsync();
       await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
 
       const uri = recordingRef.current.getURI();
+      console.log("📁 Recording URI:", uri);
+      
       if (!uri) throw new Error("No recording URI found");
 
-      const audioFile = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
+      setRecordingUri(uri);
+      const finalDuration = recordingDuration;
 
-      if (Platform.OS === "web") {
-        const sampleRate = await detectSampleRate(uri);
-        setSampleRate(sampleRate);
+      // If Web Speech was used, we already have transcription
+      if (useWebSpeech && transcription) {
+        console.log("✅ Using Web Speech transcription");
+        // Save to Firestore
+        await saveRecordingToFirestore(uri, transcription, finalDuration);
+        return;
       }
 
-      await transcribeAudio(audioFile);
+      // Otherwise, transcribe with AssemblyAI
+      console.log("✅ Recording stopped, starting transcription...");
+      await transcribeAudio(uri, finalDuration);
     } catch (error) {
-      console.error("Stop recording failed:", error);
+      console.error("❌ Stop recording failed:", error);
       Alert.alert("Error", "Failed to stop recording. Please try again.");
     }
   };
 
-  const detectSampleRate = async (uri) => {
-    return new Promise((resolve) => {
-      const audio = new Audio();
-      audio.src = uri;
-      audio.onloadedmetadata = () => {
-        resolve(audio.sampleRate || 48000);
-      };
-      audio.onerror = () => {
-        resolve(48000);
-      };
-    });
-  };
-
-  const transcribeAudio = async (audioFile) => {
+  const transcribeAudio = async (uri, duration) => {
     try {
       setIsTranscribing(true);
-      
-      if (!GOOGLE_API_KEY) {
-        throw new Error("Google API key is missing.");
-      }
+      console.log("🎯 Choosing transcription method...");
 
-      const config = {
-        encoding: Platform.select({
-          android: "AMR_WB",
-          ios: "LINEAR16",
-          web: "WEBM_OPUS",
-        }),
-        sampleRateHertz: sampleRate || 16000,
-        languageCode: "en-US",
-        enableAutomaticPunctuation: true,
-        model: "latest_long",
-      };
+      let transcribedText = "";
+      let method = transcriptionMethod;
 
-      const response = await fetch(
-        `https://speech.googleapis.com/v1/speech:recognize?key=${GOOGLE_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            config,
-            audio: { content: audioFile },
-          }),
+      // Auto mode: Try AssemblyAI first, fallback to Web Speech
+      if (method === "auto") {
+        if (ASSEMBLYAI_API_KEY && ASSEMBLYAI_API_KEY.length > 10) {
+          method = "assemblyai";
+        } else if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
+          method = "webspeech-fallback";
+        } else {
+          throw new Error("No transcription method available");
         }
-      );
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error?.message || "Transcription failed");
       }
 
-      const data = await response.json();
-      const results = data.results
-        ?.map((result) => result.alternatives[0]?.transcript)
-        .filter(Boolean);
+      // Try AssemblyAI
+      if (method === "assemblyai") {
+        try {
+          console.log("🚀 Using AssemblyAI...");
+          transcribedText = await transcribeWithAssemblyAI(uri);
+          console.log("✅ AssemblyAI success!");
+        } catch (error) {
+          console.error("❌ AssemblyAI failed:", error);
+          
+          // Fallback to Web Speech
+          if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
+            console.log("🔄 Falling back to Web Speech...");
+            Alert.alert(
+              "Fallback Mode",
+              "AssemblyAI unavailable. Using Web Speech API.\nTip: Enable 'Real-time Mode' before recording for instant transcription."
+            );
+            transcribedText = "AssemblyAI unavailable. Please use real-time mode or check API key configuration.";
+          } else {
+            throw error;
+          }
+        }
+      }
 
-      setTranscription(results?.join("\n") || "No speech detected");
+      setTranscription(transcribedText || "No speech detected");
       
-      if (results && results.length > 0) {
-        await haptics.notification('Success');
+      // Save to Firestore
+      if (transcribedText) {
+        await saveRecordingToFirestore(uri, transcribedText, duration);
       }
     } catch (error) {
-      console.error("Transcription error:", error);
-      Alert.alert("Error", `Transcription failed: ${error.message}`);
+      console.error("❌ Transcription error:", error);
+      Alert.alert(
+        "Transcription Error",
+        `${error.message}\n\nTip: Enable "Real-time Mode" for instant transcription without API keys!`
+      );
     } finally {
       setIsTranscribing(false);
     }
@@ -340,25 +704,52 @@ export default function RecordScreen() {
             text: "Discard",
             style: "destructive",
             onPress: async () => {
+              console.log("🗑️ Discarding...");
               setIsRecording(false);
               setIsPaused(false);
               setRecordingDuration(0);
-              await recordingRef.current.stopAndUnloadAsync();
-              await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+              setTranscription("");
+              setRecordingUri(null);
+              
+              stopWebSpeechRecognition();
+              
+              if (recordingRef.current) {
+                await recordingRef.current.stopAndUnloadAsync();
+                await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
+              }
+              console.log("✅ Discarded");
             },
           },
         ]
       );
     } catch (error) {
-      console.error("Cancel recording failed:", error);
+      console.error("❌ Cancel failed:", error);
+    }
+  };
+
+  const copyTranscription = async () => {
+    await haptics.impact("Light");
+    Clipboard.setString(transcription);
+    Alert.alert("Copied!", "Transcription copied to clipboard.");
+  };
+
+  const shareTranscription = async () => {
+    await haptics.impact("Light");
+    try {
+      await Share.share({
+        message: transcription,
+        title: "Lecture Transcription",
+      });
+    } catch (error) {
+      console.error("Share error:", error);
     }
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, isDark && styles.containerDark]}>
       {/* Header */}
       <LinearGradient
-        colors={["#9B5DE5", "#6B21A8"]}
+        colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#6B21A8"]}
         style={styles.header}
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
@@ -367,7 +758,7 @@ export default function RecordScreen() {
         <MaterialIcons name="mic" size={32} color="rgba(255,255,255,0.3)" />
         <Text style={styles.headerText}>Record Lecture</Text>
         <Text style={styles.headerSubtext}>
-          {isRecording ? "Recording in progress..." : "Start a new recording session"}
+          {useWebSpeech ? "Real-time transcription" : "Record & transcribe"}
         </Text>
       </LinearGradient>
 
@@ -376,23 +767,57 @@ export default function RecordScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.scrollContent}
       >
-        {/* Recording Container */}
         <Animated.View 
           style={[
             styles.recordContainer,
+            isDark && { backgroundColor: "#1F2937" },
             {
               opacity: fadeAnim,
               transform: [{ translateY: slideAnim }],
             },
           ]}
         >
+          {/* Real-time Mode Toggle */}
+          {Platform.OS === "web" && typeof window !== 'undefined' && 'webkitSpeechRecognition' in window && !isRecording && (
+            <View style={[styles.modeToggle, isDark && styles.modeToggleDark]}>
+              <View style={styles.modeInfo}>
+                <MaterialIcons 
+                  name={useWebSpeech ? "flash-on" : "schedule"} 
+                  size={20} 
+                  color={useWebSpeech ? "#10B981" : "#9B5DE5"} 
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.modeLabel, isDark && styles.textDark]}>
+                    {useWebSpeech ? "Real-time Mode" : "Post-recording Mode"}
+                  </Text>
+                  <Text style={[styles.modeDescription, isDark && styles.textSecondaryDark]}>
+                    {useWebSpeech 
+                      ? "See text as you speak (Free, instant)"
+                      : "Transcribe after recording (Better accuracy)"}
+                  </Text>
+                </View>
+              </View>
+              <Switch
+                value={useWebSpeech}
+                onValueChange={(value) => {
+                  haptics.impact("Light");
+                  setUseWebSpeech(value);
+                }}
+                trackColor={{ false: "#D1D5DB", true: "#10B981" }}
+                thumbColor="#FFFFFF"
+              />
+            </View>
+          )}
+
           {/* Timer */}
           {isRecording && (
             <View style={styles.timerContainer}>
               <View style={[styles.recordingIndicator, isPaused && styles.pausedIndicator]} />
-              <Text style={styles.timerText}>{formatDuration(recordingDuration)}</Text>
+              <Text style={[styles.timerText, isDark && styles.textDark]}>
+                {formatDuration(recordingDuration)}
+              </Text>
               <Text style={styles.timerLabel}>
-                {isPaused ? "Paused" : "Recording"}
+                {isPaused ? "Paused" : useWebSpeech ? "Recording (Live)" : "Recording"}
               </Text>
             </View>
           )}
@@ -437,6 +862,8 @@ export default function RecordScreen() {
                   isRecording
                     ? isPaused
                       ? ["#F59E0B", "#D97706"]
+                      : useWebSpeech
+                      ? ["#10B981", "#059669"]
                       : ["#EF4444", "#DC2626"]
                     : ["#6B7280", "#4B5563"]
                 }
@@ -452,10 +879,12 @@ export default function RecordScreen() {
           </View>
 
           {/* Status Text */}
-          <Text style={styles.recordStatus}>
+          <Text style={[styles.recordStatus, isDark && styles.textDark]}>
             {isRecording
               ? isPaused
                 ? "Recording Paused"
+                : useWebSpeech
+                ? "Recording (Live Transcription)"
                 : "Recording in Progress"
               : "Ready to Record"}
           </Text>
@@ -469,7 +898,7 @@ export default function RecordScreen() {
                 activeOpacity={0.8}
               >
                 <LinearGradient
-                  colors={["#10B981", "#059669"]}
+                  colors={useWebSpeech ? ["#10B981", "#059669"] : ["#9B5DE5", "#7C3AED"]}
                   style={styles.buttonGradient}
                 >
                   <MaterialIcons name="fiber-manual-record" size={24} color="#fff" />
@@ -484,7 +913,7 @@ export default function RecordScreen() {
                   activeOpacity={0.7}
                 >
                   <MaterialIcons name="close" size={24} color="#EF4444" />
-                  <Text style={styles.secondaryButtonText}>Cancel</Text>
+                  <Text style={[styles.secondaryButtonText, { color: "#EF4444" }]}>Cancel</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -497,7 +926,7 @@ export default function RecordScreen() {
                     size={24}
                     color="#9B5DE5"
                   />
-                  <Text style={styles.secondaryButtonText}>
+                  <Text style={[styles.secondaryButtonText, { color: "#9B5DE5" }]}>
                     {isPaused ? "Resume" : "Pause"}
                   </Text>
                 </TouchableOpacity>
@@ -521,26 +950,31 @@ export default function RecordScreen() {
 
           {/* Recording Tips */}
           {!isRecording && (
-            <View style={styles.tipsContainer}>
+            <View style={[styles.tipsContainer, isDark && styles.tipsContainerDark]}>
               <MaterialIcons name="lightbulb-outline" size={18} color="#9B5DE5" />
-              <Text style={styles.tipsText}>
-                Tip: Speak clearly and avoid background noise for best results
+              <Text style={[styles.tipsText, isDark && styles.textSecondaryDark]}>
+                {useWebSpeech 
+                  ? "Tip: Real-time mode works instantly without internet!"
+                  : "Tip: Post-recording mode provides better accuracy with internet access."}
               </Text>
             </View>
           )}
         </Animated.View>
 
         {/* Transcription Container */}
-        {(transcription || isTranscribing) && (
+        {(transcription || isTranscribing || isSaving) && (
           <Animated.View
             style={[
               styles.transcriptionContainer,
+              isDark && styles.transcriptionContainerDark,
               { opacity: fadeAnim },
             ]}
           >
             <View style={styles.transcriptionHeader}>
-              <MaterialIcons name="article" size={24} color="#9B5DE5" />
-              <Text style={styles.transcriptionTitle}>Transcription</Text>
+              <MaterialIcons name="article" size={24} color={useWebSpeech ? "#10B981" : "#9B5DE5"} />
+              <Text style={[styles.transcriptionTitle, isDark && styles.textDark]}>
+                {useWebSpeech ? "Live Transcription" : "Transcription"}
+              </Text>
             </View>
 
             {isTranscribing ? (
@@ -548,30 +982,72 @@ export default function RecordScreen() {
                 <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
                   <MaterialIcons name="sync" size={32} color="#9B5DE5" />
                 </Animated.View>
-                <Text style={styles.loadingText}>Processing audio...</Text>
+                <Text style={[styles.loadingText, isDark && styles.textSecondaryDark]}>
+                  Processing with AssemblyAI... This may take a moment.
+                </Text>
+              </View>
+            ) : isSaving ? (
+              <View style={styles.loadingContainer}>
+                <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                  <MaterialIcons name="cloud-upload" size={32} color="#10B981" />
+                </Animated.View>
+                <Text style={[styles.loadingText, isDark && styles.textSecondaryDark]}>
+                  Saving to cloud storage...
+                </Text>
               </View>
             ) : (
-              <ScrollView style={styles.transcriptionScroll}>
-                <Text style={styles.transcriptionText}>{transcription}</Text>
-              </ScrollView>
-            )}
+              <>
+                <ScrollView style={styles.transcriptionScroll}>
+                  <Text style={[styles.transcriptionText, isDark && styles.textDark]}>
+                    {transcription}
+                  </Text>
+                </ScrollView>
 
-            {/* Action buttons for transcription */}
-            {transcription && !isTranscribing && (
-              <View style={styles.transcriptionActions}>
-                <TouchableOpacity style={styles.actionButton}>
-                  <MaterialIcons name="content-copy" size={20} color="#6B7280" />
-                  <Text style={styles.actionButtonText}>Copy</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <MaterialIcons name="share" size={20} color="#6B7280" />
-                  <Text style={styles.actionButtonText}>Share</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <MaterialIcons name="save" size={20} color="#6B7280" />
-                  <Text style={styles.actionButtonText}>Save</Text>
-                </TouchableOpacity>
-              </View>
+                {/* Action buttons */}
+                <View style={styles.transcriptionActions}>
+                  <TouchableOpacity 
+                    style={styles.actionButton}
+                    onPress={copyTranscription}
+                  >
+                    <MaterialIcons name="content-copy" size={20} color="#6B7280" />
+                    <Text style={[styles.actionButtonText, isDark && styles.textSecondaryDark]}>
+                      Copy
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.actionButton}
+                    onPress={shareTranscription}
+                  >
+                    <MaterialIcons name="share" size={20} color="#6B7280" />
+                    <Text style={[styles.actionButtonText, isDark && styles.textSecondaryDark]}>
+                      Share
+                    </Text>
+                  </TouchableOpacity>
+                  
+                  <TouchableOpacity 
+                    style={styles.actionButton}
+                    onPress={() => navigation.navigate("History")}
+                  >
+                    <MaterialIcons name="history" size={20} color="#6B7280" />
+                    <Text style={[styles.actionButtonText, isDark && styles.textSecondaryDark]}>
+                      View All
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Method indicator */}
+                <View style={styles.methodBadge}>
+                  <MaterialIcons 
+                    name={useWebSpeech ? "flash-on" : "cloud"} 
+                    size={12} 
+                    color={useWebSpeech ? "#10B981" : "#9B5DE5"} 
+                  />
+                  <Text style={styles.methodText}>
+                    {useWebSpeech ? "Web Speech API" : "AssemblyAI"} • Saved to Cloud
+                  </Text>
+                </View>
+              </>
             )}
           </Animated.View>
         )}
@@ -579,10 +1055,54 @@ export default function RecordScreen() {
         {!transcription && !isTranscribing && !isRecording && (
           <View style={styles.placeholderContainer}>
             <MaterialIcons name="mic-none" size={64} color="#D1D5DB" />
-            <Text style={styles.placeholderText}>No recordings yet</Text>
-            <Text style={styles.placeholderSubtext}>
-              Start recording to capture and transcribe your lecture
+            <Text style={[styles.placeholderText, isDark && styles.textSecondaryDark]}>
+              No recordings yet
             </Text>
+            <Text style={[styles.placeholderSubtext, isDark && styles.textSecondaryDark]}>
+              {useWebSpeech 
+                ? "Enable real-time mode to see text as you speak"
+                : "Start recording to capture and transcribe your lecture"}
+            </Text>
+            
+            {/* Setup Instructions */}
+            <View style={[styles.setupCard, isDark && styles.setupCardDark]}>
+              <Text style={[styles.setupTitle, isDark && styles.textDark]}>
+                🚀 Quick Setup
+              </Text>
+              <View style={styles.setupStep}>
+                <Text style={styles.setupNumber}>1</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
+                    Real-time Mode (FREE)
+                  </Text>
+                  <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
+                    Toggle switch above • Works instantly • No API key needed
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.setupStep}>
+                <Text style={styles.setupNumber}>2</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
+                    Better Accuracy (5hrs free/month)
+                  </Text>
+                  <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
+                    Get free API key at assemblyai.com • Add to RecordScreen.js
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.setupStep}>
+                <Text style={styles.setupNumber}>3</Text>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
+                    Auto-Save Enabled ✅
+                  </Text>
+                  <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
+                    All recordings automatically saved to Firestore
+                  </Text>
+                </View>
+              </View>
+            </View>
           </View>
         )}
       </ScrollView>
@@ -594,6 +1114,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: "#F5F7FA",
+  },
+  containerDark: {
+    backgroundColor: "#0F172A",
   },
   header: {
     paddingTop: 60,
@@ -641,6 +1164,34 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
     marginBottom: 24,
+  },
+  modeToggle: {
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 24,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  modeToggleDark: {
+    backgroundColor: "#374151",
+  },
+  modeInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+    gap: 12,
+  },
+  modeLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#1F2937",
+    marginBottom: 2,
+  },
+  modeDescription: {
+    fontSize: 12,
+    color: "#6B7280",
   },
   timerContainer: {
     alignItems: "center",
@@ -762,7 +1313,6 @@ const styles = StyleSheet.create({
     gap: 4,
   },
   secondaryButtonText: {
-    color: "#4B5563",
     fontSize: 12,
     fontWeight: "600",
   },
@@ -773,6 +1323,9 @@ const styles = StyleSheet.create({
     padding: 12,
     borderRadius: 12,
     gap: 8,
+  },
+  tipsContainerDark: {
+    backgroundColor: "#374151",
   },
   tipsText: {
     flex: 1,
@@ -790,6 +1343,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
     marginBottom: 24,
+  },
+  transcriptionContainerDark: {
+    backgroundColor: "#1F2937",
   },
   transcriptionHeader: {
     flexDirection: "row",
@@ -810,6 +1366,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6B7280",
     marginTop: 12,
+    textAlign: "center",
   },
   transcriptionScroll: {
     maxHeight: 300,
@@ -826,6 +1383,7 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     borderTopWidth: 1,
     borderTopColor: "#E5E7EB",
+    marginBottom: 12,
   },
   actionButton: {
     flexDirection: "row",
@@ -836,6 +1394,18 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "#6B7280",
     fontWeight: "600",
+  },
+  methodBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 4,
+    paddingVertical: 4,
+  },
+  methodText: {
+    fontSize: 11,
+    color: "#9CA3AF",
+    fontStyle: "italic",
   },
   placeholderContainer: {
     alignItems: "center",
@@ -853,5 +1423,57 @@ const styles = StyleSheet.create({
     marginTop: 8,
     textAlign: "center",
     paddingHorizontal: 32,
+  },
+  setupCard: {
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
+    padding: 20,
+    marginTop: 24,
+    width: "100%",
+    maxWidth: 400,
+  },
+  setupCardDark: {
+    backgroundColor: "#374151",
+  },
+  setupTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 16,
+    textAlign: "center",
+  },
+  setupStep: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 16,
+    gap: 12,
+  },
+  setupNumber: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#9B5DE5",
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+    lineHeight: 28,
+  },
+  setupStepTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1F2937",
+    marginBottom: 2,
+  },
+  setupStepText: {
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 18,
+  },
+  textDark: {
+    color: "#F9FAFB",
+  },
+  textSecondaryDark: {
+    color: "#D1D5DB",
   },
 });

@@ -33,7 +33,7 @@ import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
 import { getFirestore, doc, getDoc } from "firebase/firestore";
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import haptics from "./utils/haptics"; // Import safe haptics utility
+import haptics from "./utils/haptics"; 
 
 interface SidebarProps {
   isOpen: boolean;
@@ -171,7 +171,7 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
       title: "Settings",
       items: [
         { icon: Laptop2, label: "Paired Devices", screen: "PairedDevicesScreen", badge: "2" },
-        { icon: Bell, label: "Notifications", screen: "NotificationsScreen", badge: null, toggle: true },
+        { icon: Bell, label: "Notifications", screen: "NotificationsScreen", badge: null,  },
         { icon: isDark ? Sun : Moon, label: "Dark Mode", screen: "", badge: null, toggle: true, isTheme: true },
         { icon: Shield, label: "Privacy", screen: "PrivacyScreen", badge: null },
         { icon: Settings, label: "Preferences", screen: "PreferencesScreen", badge: null },

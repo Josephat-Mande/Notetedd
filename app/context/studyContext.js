@@ -1,4 +1,4 @@
-// contexts/StudyContext.js
+
 import React, { createContext, useState, useContext } from 'react';
 
 const StudyContext = createContext();
@@ -29,4 +29,4 @@ export const StudyProvider = ({ children }) => {
   );
 };
 
-export const useStudy = () => useContext(StudyContext);
+export  const useStudy = () => useContext(StudyContext);
