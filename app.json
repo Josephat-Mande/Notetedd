@@ -15,7 +15,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./adaptive-icon.jpg",
+        "foregroundImage": "./public/adaptive-icon.jpg",
         "backgroundColor": "#ffffff"
       },
       "package": "com.notetedd.app"
@@ -23,14 +23,14 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./favicon.jpg"
+      "favicon": "./public/favicon.jpg"
     },
     "plugins": [
       "expo-router",
       [
         "expo-splash-screen",
         {
-          "image": "./splash-icon.jpg",
+          "image": "./public/splash-icon.jpg",
           "imageWidth": 200,
           "width": 1024,
           "height": 800,

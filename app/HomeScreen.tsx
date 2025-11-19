@@ -1,5 +1,5 @@
-// HomeScreen.js - Complete Integration Example
-import React, { useState, useEffect, useMemo, useRef } from "react";
+// HomeScreen.js - Complete Integration with Real Data
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -11,39 +11,52 @@ import {
   Modal,
   Animated,
   StatusBar,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
-import { useNavigation } from "@react-navigation/native";
+import { 
+  getFirestore, 
+  collection, 
+  query, 
+  where, 
+  orderBy, 
+  getDocs,
+  limit 
+} from "firebase/firestore";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import Sidebar from "./Sidebar";
 
-// Import new components
+// Import widgets
 import StudyAnalyticsWidget from "../components/widgets/StudyAnalyticsWidget";
 import PomodoroTimerWidget from "../components/widgets/PomodoroTimerWidget";
 import AchievementModal from "../components/widgets/AchievementModal";
 
 export default function HomeScreen() {
   const navigation = useNavigation();
+  const auth = getAuth();
+  const db = getFirestore();
+  
   const [fullName, setFullName] = useState("User");
   const systemScheme = useColorScheme();
   const [theme, setTheme] = useState(systemScheme || "light");
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  
+  // Real Data State
+  const [streakCount, setStreakCount] = useState(0);
+  const [totalHours, setTotalHours] = useState(0);
+  const [notesCount, setNotesCount] = useState(0);
+  const [quizzesCount, setQuizzesCount] = useState(0);
+  const [weeklyData, setWeeklyData] = useState([]);
+  const [recentLectures, setRecentLectures] = useState([]);
   
   // Achievement state
   const [showAchievement, setShowAchievement] = useState(false);
   const [currentAchievement, setCurrentAchievement] = useState(null);
-  
-  // Weekly study data
-  const [weeklyData, setWeeklyData] = useState([
-    { day: 'Mon', hours: 2, label: 'M' },
-    { day: 'Tue', hours: 3.5, label: 'T' },
-    { day: 'Wed', hours: 1.5, label: 'W' },
-    { day: 'Thu', hours: 4, label: 'T' },
-    { day: 'Fri', hours: 2.5, label: 'F' },
-    { day: 'Sat', hours: 0.5, label: 'S' },
-    { day: 'Sun', hours: 1, label: 'S' },
-  ]);
   
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -51,8 +64,8 @@ export default function HomeScreen() {
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
+  // Initialize animations
   useEffect(() => {
-    // Entrance animations
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
@@ -90,19 +103,342 @@ export default function HomeScreen() {
     ).start();
   }, []);
 
+  // Auth listener
   useEffect(() => {
-    const auth = getAuth();
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setFullName(user?.displayName || "User");
+        loadAllData();
+      } else {
+        setLoading(false);
       }
     });
     return () => unsubscribe();
   }, []);
 
-  // const toggleTheme = () => {
-  //   setTheme((prev) => (prev === "light" ? "dark" : "light"));
-  // };
+  // Refresh data when screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      if (auth.currentUser) {
+        loadAllData();
+      }
+    }, [])
+  );
+
+  // ==================== DATA LOADING ====================
+  const loadAllData = async () => {
+    try {
+      setLoading(true);
+      console.log("📊 Loading dashboard data...");
+
+      await Promise.all([
+        calculateStreak(),
+        loadStats(),
+        loadWeeklyActivity(),
+        loadRecentLectures(),
+      ]);
+
+      console.log("✅ Dashboard data loaded!");
+    } catch (error) {
+      console.error("❌ Error loading dashboard data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ==================== STREAK CALCULATION ====================
+  const calculateStreak = async () => {
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+
+      // Get all recordings ordered by date
+      const recordingsRef = collection(db, "recordings");
+      const q = query(
+        recordingsRef,
+        where("userId", "==", currentUser.uid),
+        orderBy("createdAt", "desc")
+      );
+
+      const querySnapshot = await getDocs(q);
+      
+      if (querySnapshot.empty) {
+        setStreakCount(0);
+        return;
+      }
+
+      // Extract unique days
+      const activityDays = new Set();
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.createdAt) {
+          const date = data.createdAt.toDate();
+          const dayKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+          activityDays.add(dayKey);
+        }
+      });
+
+      // Calculate streak
+      const sortedDays = Array.from(activityDays).sort().reverse();
+      const today = new Date();
+      const todayKey = `${today.getFullYear()}-${today.getMonth()}-${today.getDate()}`;
+      
+      let streak = 0;
+      let checkDate = new Date(today);
+      
+      // Check if user was active today or yesterday
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+      const yesterdayKey = `${yesterday.getFullYear()}-${yesterday.getMonth()}-${yesterday.getDate()}`;
+      
+      if (!sortedDays.includes(todayKey) && !sortedDays.includes(yesterdayKey)) {
+        setStreakCount(0);
+        return;
+      }
+
+      // Count consecutive days
+      for (let i = 0; i < 365; i++) {
+        const dateKey = `${checkDate.getFullYear()}-${checkDate.getMonth()}-${checkDate.getDate()}`;
+        
+        if (sortedDays.includes(dateKey)) {
+          streak++;
+          checkDate.setDate(checkDate.getDate() - 1);
+        } else {
+          break;
+        }
+      }
+
+      console.log(`🔥 Streak calculated: ${streak} days`);
+      setStreakCount(streak);
+
+      // Save to AsyncStorage for offline access
+      await AsyncStorage.setItem('userStreak', streak.toString());
+
+    } catch (error) {
+      console.error("❌ Error calculating streak:", error);
+      // Fallback to AsyncStorage
+      const savedStreak = await AsyncStorage.getItem('userStreak');
+      setStreakCount(savedStreak ? parseInt(savedStreak) : 0);
+    }
+  };
+
+  // ==================== STATS LOADING ====================
+  const loadStats = async () => {
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+
+      const recordingsRef = collection(db, "recordings");
+      const q = query(
+        recordingsRef,
+        where("userId", "==", currentUser.uid)
+      );
+
+      const querySnapshot = await getDocs(q);
+      
+      let totalDuration = 0;
+      let notesSessionCount = 0;
+      let quizSessionCount = 0;
+
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        
+        // Count notes sessions
+        if (data.organizedNotes) {
+          notesSessionCount++;
+        }
+
+        // Count quiz sessions
+        if (data.quiz) {
+          quizSessionCount++;
+        }
+
+        // Calculate total duration
+        if (data.duration) {
+          totalDuration += data.duration;
+        } else if (data.audioUrl && data.createdAt) {
+          // Estimate duration if not directly available
+          totalDuration += 1800; // Default 30 minutes
+        }
+      });
+
+      // Convert seconds to hours
+      const hours = (totalDuration / 3600).toFixed(1);
+      
+      console.log(`📚 Stats: ${hours}h, ${notesSessionCount} notes, ${quizSessionCount} quizzes`);
+      
+      setTotalHours(hours);
+      setNotesCount(notesSessionCount);
+      setQuizzesCount(quizSessionCount);
+
+      // Save to AsyncStorage
+      await AsyncStorage.setItem('stats', JSON.stringify({
+        hours,
+        notes: notesSessionCount,
+        quizzes: quizSessionCount,
+      }));
+
+    } catch (error) {
+      console.error("❌ Error loading stats:", error);
+      // Fallback to AsyncStorage
+      const savedStats = await AsyncStorage.getItem('stats');
+      if (savedStats) {
+        const stats = JSON.parse(savedStats);
+        setTotalHours(stats.hours || 0);
+        setNotesCount(stats.notes || 0);
+        setQuizzesCount(stats.quizzes || 0);
+      }
+    }
+  };
+
+  // ==================== WEEKLY ACTIVITY ====================
+  const loadWeeklyActivity = async () => {
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+
+      // Get recordings from last 7 days
+      const sevenDaysAgo = new Date();
+      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+      const recordingsRef = collection(db, "recordings");
+      const q = query(
+        recordingsRef,
+        where("userId", "==", currentUser.uid),
+        where("createdAt", ">=", sevenDaysAgo),
+        orderBy("createdAt", "asc")
+      );
+
+      const querySnapshot = await getDocs(q);
+      
+      // Initialize week data
+      const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const weekData = daysOfWeek.map((day, index) => {
+        const date = new Date();
+        date.setDate(date.getDate() - (6 - index));
+        return {
+          day: day,
+          label: day.charAt(0),
+          hours: 0,
+          date: date.toDateString(),
+        };
+      });
+
+      // Aggregate activity by day
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        if (data.createdAt) {
+          const activityDate = data.createdAt.toDate();
+          const dayIndex = activityDate.getDay();
+          const duration = data.duration || 1800; // Default 30 minutes
+          
+          // Find matching day in weekData
+          const weekDay = weekData.find(d => {
+            const wDate = new Date(d.date);
+            return wDate.toDateString() === activityDate.toDateString();
+          });
+          
+          if (weekDay) {
+            weekDay.hours += duration / 3600; // Convert to hours
+          }
+        }
+      });
+
+      // Round hours to 1 decimal
+      weekData.forEach(day => {
+        day.hours = Math.round(day.hours * 10) / 10;
+      });
+
+      console.log("📅 Weekly activity loaded:", weekData);
+      setWeeklyData(weekData);
+
+    } catch (error) {
+      console.error("❌ Error loading weekly activity:", error);
+      // Fallback to empty data
+      const daysOfWeek = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      setWeeklyData(daysOfWeek.map(day => ({
+        day,
+        label: day.charAt(0),
+        hours: 0,
+      })));
+    }
+  };
+
+  // ==================== RECENT LECTURES ====================
+  const loadRecentLectures = async () => {
+    try {
+      const currentUser = auth.currentUser;
+      if (!currentUser) return;
+
+      const recordingsRef = collection(db, "recordings");
+      const q = query(
+        recordingsRef,
+        where("userId", "==", currentUser.uid),
+        orderBy("createdAt", "desc"),
+        limit(5)
+      );
+
+      const querySnapshot = await getDocs(q);
+      
+      const lectures = [];
+      const colors = ["#9B5DE5", "#00B4D8", "#FF006E", "#FFD93D", "#10B981"];
+
+      querySnapshot.forEach((doc, index) => {
+        const data = doc.data();
+        
+        if (data.organizedNotes) {
+          const createdAt = data.createdAt?.toDate() || new Date();
+          const duration = data.duration 
+            ? Math.round(data.duration / 60) 
+            : 30;
+
+          // Calculate progress based on whether quiz exists
+          const progress = data.quiz ? 100 : data.organizedNotes ? 75 : 50;
+
+          // Get relative time
+          const timeAgo = getTimeAgo(createdAt);
+
+          lectures.push({
+            id: doc.id,
+            title: data.organizedNotes.title || "Untitled Lecture",
+            duration: `${duration} mins`,
+            date: timeAgo,
+            progress: progress,
+            color: colors[index % colors.length],
+            topic: data.organizedNotes.keyPoints?.[0]?.substring(0, 50) || "General Topic",
+          });
+        }
+      });
+
+      console.log(`🎓 Recent lectures loaded: ${lectures.length}`);
+      setRecentLectures(lectures);
+
+      // Save to AsyncStorage
+      await AsyncStorage.setItem('recentLectures', JSON.stringify(lectures));
+
+    } catch (error) {
+      console.error("❌ Error loading recent lectures:", error);
+      // Fallback to AsyncStorage
+      const savedLectures = await AsyncStorage.getItem('recentLectures');
+      if (savedLectures) {
+        setRecentLectures(JSON.parse(savedLectures));
+      }
+    }
+  };
+
+  // ==================== HELPER FUNCTIONS ====================
+  const getTimeAgo = (date) => {
+    const now = new Date();
+    const diff = now - date;
+    const hours = Math.floor(diff / (1000 * 60 * 60));
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+
+    if (hours < 1) return "Just now";
+    if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+    if (days === 1) return "Yesterday";
+    if (days < 7) return `${days} days ago`;
+    return date.toLocaleDateString();
+  };
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -124,89 +460,120 @@ export default function HomeScreen() {
     return quotes[hour % quotes.length];
   };
 
-  // Handle Pomodoro session completion
+  // ==================== NAVIGATION HANDLERS ====================
+  const handleQuickAction = (action) => {
+    switch (action) {
+      case "New Note":
+        navigation.navigate("RecordScreen");
+        break;
+      case "Take Quiz":
+        navigation.navigate("QuizScreen", { theme });
+        break;
+      case "AI Summary":
+        navigation.navigate("NotesScreen", { theme });
+        break;
+      case "Schedule":
+        Alert.alert("Coming Soon", "Schedule feature is under development!");
+        break;
+      default:
+        break;
+    }
+  };
+
+  const handleLecturePress = (lecture) => {
+    navigation.navigate("NotesScreen", { 
+      theme,
+      lectureId: lecture.id 
+    });
+  };
+
+  const handleStartRecording = () => {
+    navigation.navigate("RecordScreen");
+  };
+
+  // ==================== EVENT HANDLERS ====================
   const handlePomodoroComplete = (sessionType) => {
     console.log(`${sessionType} session completed!`);
     
-    // Check for achievements
-    // Example: First pomodoro session
     const achievement = {
-      id: 'first_pomodoro',
+      id: 'pomodoro_complete',
       icon: 'timer',
       title: 'Focused Mind',
-      description: 'Completed your first Pomodoro session!',
+      description: 'Completed a Pomodoro session!',
       color: '#9B5DE5',
       points: 25,
     };
     
-    // Show achievement (you'd check if it's actually unlocked)
-    // setCurrentAchievement(achievement);
-    // setShowAchievement(true);
+    setCurrentAchievement(achievement);
+    setShowAchievement(true);
+    
+    // Refresh stats
+    loadStats();
   };
 
-  const stats = useMemo(
-    () => [
-      { icon: "access-time", label: "Hours", value: "12.5", color: "#FF6B6B", gradient: ["#FF6B6B", "#FF8E53"] },
-      { icon: "book", label: "Notes", value: "24", color: "#4ECDC4", gradient: ["#4ECDC4", "#44A08D"] },
-      { icon: "psychology", label: "Quizzes", value: "8", color: "#FFD93D", gradient: ["#FFD93D", "#F6C744"] },
-    ],
-    []
-  );
-
-  const recentLectures = [
-    { 
-      title: "Introduction to Economics", 
-      duration: "45 mins", 
-      date: "2 hours ago",
-      progress: 85,
-      color: "#9B5DE5"
-    },
-    { 
-      title: "Advanced Calculus", 
-      duration: "60 mins", 
-      date: "Yesterday",
-      progress: 100,
-      color: "#00B4D8"
-    },
-    { 
-      title: "World History", 
-      duration: "30 mins", 
-      date: "2 days ago",
-      progress: 60,
-      color: "#FF006E"
-    },
-  ];
-
-  const achievements = [
-    { icon: "emoji-events", label: "3 Day Streak!", color: "#FFD700" },
-    { icon: "stars", label: "Top Learner", color: "#9B5DE5" },
-  ];
-
-  const { height, width } = Dimensions.get("window");
-  const isDark = theme === "dark";
+  const toggleTheme = () => {
+    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+  };
 
   const toggleSidebar = () => {
     setIsSidebarOpen((prev) => !prev);
   };
 
-  // In your HomeScreen or parent component
-// const [theme, setTheme] = useState('light');
+  // ==================== COMPUTED VALUES ====================
+  const stats = useMemo(
+    () => [
+      { 
+        icon: "access-time", 
+        label: "Hours", 
+        value: totalHours.toString(), 
+        color: "#FF6B6B", 
+        gradient: ["#FF6B6B", "#FF8E53"] 
+      },
+      { 
+        icon: "book", 
+        label: "Notes", 
+        value: notesCount.toString(), 
+        color: "#4ECDC4", 
+        gradient: ["#4ECDC4", "#44A08D"] 
+      },
+      { 
+        icon: "psychology", 
+        label: "Quizzes", 
+        value: quizzesCount.toString(), 
+        color: "#FFD93D", 
+        gradient: ["#FFD93D", "#F6C744"] 
+      },
+    ],
+    [totalHours, notesCount, quizzesCount]
+  );
 
-const toggleTheme = () => {
-  setTheme(prev => prev === 'light' ? 'dark' : 'light');
-};
+  const achievements = [
+    { icon: "emoji-events", label: `${streakCount} Day Streak!`, color: "#FFD700" },
+    { icon: "stars", label: "Top Learner", color: "#9B5DE5" },
+  ];
 
-<Sidebar 
-  isOpen={isSidebarOpen} 
-  onClose={toggleSidebar}
-  theme={theme}
-  onThemeToggle={toggleTheme}
-/>
+  const { height } = Dimensions.get("window");
+  const isDark = theme === "dark";
 
+  // ==================== LOADING STATE ====================
+  if (loading) {
+    return (
+      <View style={[styles.container, isDark ? styles.darkBg : styles.lightBg]}>
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#9B5DE5" />
+          <Text style={[styles.loadingText, isDark && styles.darkText]}>
+            Loading your dashboard...
+          </Text>
+        </View>
+      </View>
+    );
+  }
+
+  // ==================== MAIN RENDER ====================
   return (
     <View style={[styles.container, isDark ? styles.darkBg : styles.lightBg]}>
       <StatusBar 
-        barStyle={isDark ? "light-content" : "light-content"} 
+        barStyle="light-content" 
         backgroundColor="transparent"
         translucent
       />
@@ -253,21 +620,23 @@ const toggleTheme = () => {
             </View>
 
             {/* Floating Streak Badge */}
-            <Animated.View 
-              style={[
-                styles.streakBadge,
-                { transform: [{ scale: pulseAnim }] }
-              ]}
-            >
-              <LinearGradient
-                colors={["#FFD700", "#FFA500"]}
-                style={styles.streakGradient}
+            {streakCount > 0 && (
+              <Animated.View 
+                style={[
+                  styles.streakBadge,
+                  { transform: [{ scale: pulseAnim }] }
+                ]}
               >
-                <MaterialIcons name="local-fire-department" size={24} color="#fff" />
-                <Text style={styles.streakNumber}>3</Text>
-                <Text style={styles.streakLabel}>day streak</Text>
-              </LinearGradient>
-            </Animated.View>
+                <LinearGradient
+                  colors={["#FFD700", "#FFA500"]}
+                  style={styles.streakGradient}
+                >
+                  <MaterialIcons name="local-fire-department" size={24} color="#fff" />
+                  <Text style={styles.streakNumber}>{streakCount}</Text>
+                  <Text style={styles.streakLabel}>day streak</Text>
+                </LinearGradient>
+              </Animated.View>
+            )}
           </LinearGradient>
         </Animated.View>
 
@@ -320,7 +689,7 @@ const toggleTheme = () => {
             }
           ]}
         >
-          {stats.map((stat, index) => (
+          {stats.map((stat) => (
             <Animated.View
               key={stat.label}
               style={[
@@ -357,68 +726,71 @@ const toggleTheme = () => {
         />
 
         {/* Recent Lectures with Progress */}
-        <Animated.View 
-          style={[
-            styles.sectionContainer,
-            isDark && styles.darkGlass,
-            { opacity: fadeAnim }
-          ]}
-        >
-          <View style={styles.sectionHeader}>
-            <View>
-              <Text style={[styles.sectionTitle, isDark && styles.darkText]}>
-                Recent Lectures
-              </Text>
-              <Text style={styles.sectionSubtitle}>Continue where you left off</Text>
+        {recentLectures.length > 0 && (
+          <Animated.View 
+            style={[
+              styles.sectionContainer,
+              isDark && styles.darkGlass,
+              { opacity: fadeAnim }
+            ]}
+          >
+            <View style={styles.sectionHeader}>
+              <View>
+                <Text style={[styles.sectionTitle, isDark && styles.darkText]}>
+                  Recent Lectures
+                </Text>
+                <Text style={styles.sectionSubtitle}>Continue where you left off</Text>
+              </View>
+              <TouchableOpacity onPress={() => navigation.navigate("NotesScreen", { theme })}>
+                <Text style={styles.seeAll}>See All →</Text>
+              </TouchableOpacity>
             </View>
-            <TouchableOpacity>
-              <Text style={styles.seeAll}>See All →</Text>
-            </TouchableOpacity>
-          </View>
 
-          {recentLectures.map((lecture, index) => (
-            <TouchableOpacity 
-              key={lecture.title}
-              activeOpacity={0.7}
-              style={[
-                styles.lectureCard,
-                isDark && styles.darkLectureCard,
-              ]}
-            >
-              <View style={styles.lectureMain}>
-                <View style={[styles.lectureIcon, { backgroundColor: lecture.color + "20" }]}>
-                  <MaterialIcons name="mic" color={lecture.color} size={24} />
-                </View>
-                <View style={styles.lectureInfo}>
-                  <Text style={[styles.lectureTitle, isDark && styles.darkText]}>
-                    {lecture.title}
-                  </Text>
-                  <Text style={styles.lectureDetails}>
-                    {lecture.duration} • {lecture.date}
-                  </Text>
-                  
-                  {/* Progress Bar */}
-                  <View style={styles.progressContainer}>
-                    <View style={styles.progressBar}>
-                      <View 
-                        style={[
-                          styles.progressFill,
-                          { width: `${lecture.progress}%`, backgroundColor: lecture.color }
-                        ]} 
-                      />
+            {recentLectures.map((lecture) => (
+              <TouchableOpacity 
+                key={lecture.id}
+                activeOpacity={0.7}
+                style={[
+                  styles.lectureCard,
+                  isDark && styles.darkLectureCard,
+                ]}
+                onPress={() => handleLecturePress(lecture)}
+              >
+                <View style={styles.lectureMain}>
+                  <View style={[styles.lectureIcon, { backgroundColor: lecture.color + "20" }]}>
+                    <MaterialIcons name="mic" color={lecture.color} size={24} />
+                  </View>
+                  <View style={styles.lectureInfo}>
+                    <Text style={[styles.lectureTitle, isDark && styles.darkText]}>
+                      {lecture.title}
+                    </Text>
+                    <Text style={styles.lectureDetails}>
+                      {lecture.duration} • {lecture.date}
+                    </Text>
+                    
+                    {/* Progress Bar */}
+                    <View style={styles.progressContainer}>
+                      <View style={styles.progressBar}>
+                        <View 
+                          style={[
+                            styles.progressFill,
+                            { width: `${lecture.progress}%`, backgroundColor: lecture.color }
+                          ]} 
+                        />
+                      </View>
+                      <Text style={styles.progressText}>{lecture.progress}%</Text>
                     </View>
-                    <Text style={styles.progressText}>{lecture.progress}%</Text>
                   </View>
                 </View>
-              </View>
-              <MaterialIcons 
-                name="chevron-right" 
-                color={isDark ? "#6B7280" : "#B0B0B0"} 
-                size={24} 
-              />
-            </TouchableOpacity>
-          ))}
-        </Animated.View>
+                <MaterialIcons 
+                  name="chevron-right" 
+                  color={isDark ? "#6B7280" : "#B0B0B0"} 
+                  size={24} 
+                />
+              </TouchableOpacity>
+            ))}
+          </Animated.View>
+        )}
 
         {/* Quick Actions Grid */}
         <Animated.View 
@@ -441,6 +813,7 @@ const toggleTheme = () => {
                 key={action.label}
                 style={[styles.quickActionCard, isDark && styles.darkGlass]}
                 activeOpacity={0.7}
+                onPress={() => handleQuickAction(action.label)}
               >
                 <View style={[styles.quickActionIcon, { backgroundColor: action.color + "20" }]}>
                   <MaterialIcons name={action.icon} size={28} color={action.color} />
@@ -475,7 +848,11 @@ const toggleTheme = () => {
             <Text style={styles.ctaSubtitle}>
               Transform your lectures into smart notes
             </Text>
-            <TouchableOpacity style={styles.ctaButton} activeOpacity={0.8}>
+            <TouchableOpacity 
+              style={styles.ctaButton} 
+              activeOpacity={0.8}
+              onPress={handleStartRecording}
+            >
               <LinearGradient
                 colors={["#FFFFFF", "#F8F9FA"]}
                 style={styles.ctaButtonGradient}
@@ -521,7 +898,12 @@ const toggleTheme = () => {
           activeOpacity={1}
           onPress={toggleSidebar}
         >
-          <Sidebar isOpen={isSidebarOpen} onClose={toggleSidebar} theme={theme} />
+          <Sidebar 
+            isOpen={isSidebarOpen} 
+            onClose={toggleSidebar} 
+            theme={theme}
+            onThemeToggle={toggleTheme}
+          />
         </TouchableOpacity>
       </Modal>
 
@@ -541,6 +923,20 @@ const styles = StyleSheet.create({
   lightBg: { backgroundColor: "#F5F7FA" },
   darkBg: { backgroundColor: "#0F172A" },
   scrollContent: { paddingBottom: 20 },
+  
+  // Loading State
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingTop: 100,
+  },
+  loadingText: {
+    fontSize: 16,
+    color: "#6B7280",
+    marginTop: 16,
+    fontWeight: "500",
+  },
   
   // Header Styles
   headerContainer: {

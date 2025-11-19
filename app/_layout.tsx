@@ -63,7 +63,7 @@ const navItems = [
   { icon: "microphone", path: "/RecordScreen", label: "Record" },
   { icon: "notebook-outline", path: "/NotesScreen", label: "Notes" },
   { icon: "headphones", path: "/AudioNotesScreen", label: "Audio" },
-  { icon: "translate", path: "/TranslateScreen", label: "Translate" },
+  // { icon: "translate", path: "/TranslateScreen", label: "Translate" },
   { icon: "brain", path: "/QuizScreen", label: "Quiz" },
 ];
 
