@@ -1,4 +1,4 @@
-// HomeScreen.js - Complete Integration with Real Data
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   View,

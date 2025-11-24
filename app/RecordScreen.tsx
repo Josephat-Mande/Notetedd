@@ -1067,16 +1067,16 @@ export default function RecordScreen({ route }) {
             {/* Setup Instructions */}
             <View style={[styles.setupCard, isDark && styles.setupCardDark]}>
               <Text style={[styles.setupTitle, isDark && styles.textDark]}>
-                🚀 Quick Setup
+                  Setup Instructions
               </Text>
               <View style={styles.setupStep}>
                 <Text style={styles.setupNumber}>1</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
-                    Real-time Mode (FREE)
+                    Offline  Mode (FREE)
                   </Text>
                   <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
-                    Toggle switch above • Works instantly • No API key needed
+                    Toggle switch above • Works instantly • No internet needed
                   </Text>
                 </View>
               </View>
@@ -1084,10 +1084,10 @@ export default function RecordScreen({ route }) {
                 <Text style={styles.setupNumber}>2</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
-                    Better Accuracy (5hrs free/month)
+                    Better Accuracy 
                   </Text>
                   <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
-                    Get free API key at assemblyai.com • Add to RecordScreen.js
+                    Switch to online mode
                   </Text>
                 </View>
               </View>
@@ -1098,7 +1098,7 @@ export default function RecordScreen({ route }) {
                     Auto-Save Enabled ✅
                   </Text>
                   <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
-                    All recordings automatically saved to Firestore
+                    All recordings automatically saved to your account
                   </Text>
                 </View>
               </View>

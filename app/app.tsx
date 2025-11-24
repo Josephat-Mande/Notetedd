@@ -24,6 +24,7 @@ import DarkModeScreen from "./DarkModeScreen";
 import NotificationsScreen from "./NotificationsScreen";
 import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import SubscriptionPlanScreen from "./SubscriptionPlanScreen";
+import ResetPasswordScreen from "./ResetPassword";
 
 
 const Stack = createStackNavigator<RootStackParamList>();
@@ -51,6 +52,7 @@ export default function App() {
         <Stack.Screen name="UploadPDFScreen" component={UploadPDFScreen} />
         <Stack.Screen name="PrefferencesScreen" component={PrefferencesScreen} />
         <Stack.Screen name="DarkModeScreen" component={DarkModeScreen} />
+        <Stack.Screen name="ForgotPassword" component={ResetPasswordScreen} />
         
         {/* Add all other screens here */}
       </Stack.Navigator>
