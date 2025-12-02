@@ -103,13 +103,18 @@ export default function HomeScreen() {
     ).start();
   }, []);
 
-  // Auth listener
+  // Auth listener — SAFE: waits for currentUser before loading
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       if (user) {
         setFullName(user?.displayName || "User");
-        loadAllData();
+        // Safe: user is authenticated, proceed with data load
+        loadAllData().catch(err => {
+          console.error("❌ Failed to load dashboard data:", err);
+          setLoading(false);
+        });
       } else {
+        // User not authenticated, stop loading
         setLoading(false);
       }
     });
@@ -120,7 +125,9 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       if (auth.currentUser) {
-        loadAllData();
+        loadAllData().catch(err => {
+          console.error("❌ Failed to refresh dashboard data:", err);
+        });
       }
     }, [])
   );
@@ -130,6 +137,14 @@ export default function HomeScreen() {
     try {
       setLoading(true);
       console.log("📊 Loading dashboard data...");
+
+      // Guard: ensure we have user and db context before querying
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        console.warn("⚠️ No user authenticated, skipping data load");
+        setLoading(false);
+        return;
+      }
 
       await Promise.all([
         calculateStreak(),

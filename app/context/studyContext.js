@@ -30,3 +30,5 @@ export const StudyProvider = ({ children }) => {
 };
 
 export  const useStudy = () => useContext(StudyContext);
+
+export default StudyContext;

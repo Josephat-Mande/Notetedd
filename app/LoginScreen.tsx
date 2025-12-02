@@ -256,7 +256,7 @@ export default function LoginScreen() {
   };
 
   const handleForgotPassword = () => {
-    router.push("/ForgotPassword");
+    router.push("/ResetPasswordScreen");
   };
 
   return (
@@ -378,7 +378,7 @@ export default function LoginScreen() {
                 style={styles.formGradient}
               >
                 <Text style={styles.title}>Welcome Back</Text>
-                <Text style={styles.subtitle}>Sign in to continue your learning journey ✨</Text>
+                <Text style={styles.subtitle}>Sign in to continue your smart learning journey </Text>
 
                 {/* Email Input */}
                 <View style={styles.inputWrapper}>
@@ -482,14 +482,14 @@ export default function LoginScreen() {
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* Divider */}
+                {/* Divider
                 <View style={styles.dividerContainer}>
                   <View style={styles.dividerLine} />
                   <Text style={styles.dividerText}>or continue with</Text>
                   <View style={styles.dividerLine} />
-                </View>
+                </View> */}
 
-                {/* Google Sign In Button */}
+                {/* Google Sign In Button
                 <TouchableOpacity 
                   onPress={handleGoogleSignIn}
                   style={styles.googleButton}
@@ -503,23 +503,9 @@ export default function LoginScreen() {
                     <Icon name="login" size={24} color="#4285F4" />
                     <Text style={styles.googleButtonText}>Sign in with Google</Text>
                   </LinearGradient>
-                </TouchableOpacity>
+                </TouchableOpacity> */}
 
-                {/* Benefits Section */}
-                {/* <View style={styles.benefitsContainer}>
-                  <View style={styles.benefitItem}>
-                    <Icon name="flash-on" size={18} color="#e67e22" />
-                    <Text style={styles.benefitText}>Quick Access</Text>
-                  </View>
-                  <View style={styles.benefitItem}>
-                    <Icon name="security" size={18} color="#9B5DE5" />
-                    <Text style={styles.benefitText}>Secure</Text>
-                  </View>
-                  <View style={styles.benefitItem}>
-                    <Icon name="sync" size={18} color="#10B981" />
-                    <Text style={styles.benefitText}>Synced</Text>
-                  </View>
-                </View> */}
+                
 
                 {/* Footer */}
                 <View style={styles.footer}>

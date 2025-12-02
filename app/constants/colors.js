@@ -19,3 +19,5 @@ export const colors = {
     border: 'rgba(255,255,255,0.1)',
   },
 };
+
+export default colors;

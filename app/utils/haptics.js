@@ -1,5 +1,4 @@
-// utils/haptics.js
-// Cross-platform haptics utility that safely handles web platform
+
 
 import { Platform } from 'react-native';
 import * as Haptics from 'expo-haptics';

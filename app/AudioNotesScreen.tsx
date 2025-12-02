@@ -202,18 +202,22 @@ export default function AudioNotesScreen({ navigation, route }) {
       setGeneratingAudio(true);
       console.log("🎙️ Generating audio with Web Speech...");
 
-      if (!('speechSynthesis' in window)) {
-        throw new Error("Text-to-Speech not supported in this browser");
-      }
+          if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+            throw new Error("Text-to-Speech not supported in this environment");
+          }
 
-      // Stop any existing speech
-      window.speechSynthesis.cancel();
+          // Stop any existing speech
+          if (typeof window !== 'undefined' && window.speechSynthesis) {
+            window.speechSynthesis.cancel();
+          }
 
       const script = generateAudioScript();
       const utterance = new SpeechSynthesisUtterance(script);
       
       // Get available voices
-      const voices = window.speechSynthesis.getVoices();
+      const voices = (typeof window !== 'undefined' && window.speechSynthesis)
+        ? window.speechSynthesis.getVoices()
+        : [];
       console.log("🎤 Available voices:", voices.length);
 
       // Select voice based on preference
@@ -249,10 +253,11 @@ export default function AudioNotesScreen({ navigation, route }) {
         Alert.alert("Error", "Failed to generate audio");
       };
 
-      window.speechSynthesis.speak(utterance);
-      
-      // Store reference for pause/resume
-      window.currentUtterance = utterance;
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.speak(utterance);
+        // Store reference for pause/resume
+        window.currentUtterance = utterance;
+      }
 
     } catch (error) {
       console.error("❌ Audio generation error:", error);
@@ -264,7 +269,7 @@ export default function AudioNotesScreen({ navigation, route }) {
   const handlePlay = async () => {
     await haptics.impact("Light");
 
-    if (Platform.OS === "web") {
+    if (Platform.OS === "web" && typeof window !== 'undefined' && 'speechSynthesis' in window) {
       // Use Web Speech API
       if (isPlaying && isPaused) {
         // Resume
@@ -283,7 +288,7 @@ export default function AudioNotesScreen({ navigation, route }) {
   const handlePause = async () => {
     await haptics.impact("Light");
 
-    if (Platform.OS === "web" && isPlaying) {
+    if (Platform.OS === "web" && typeof window !== 'undefined' && window.speechSynthesis && isPlaying) {
       window.speechSynthesis.pause();
       setIsPaused(true);
     }
@@ -292,7 +297,7 @@ export default function AudioNotesScreen({ navigation, route }) {
   const handleStop = async () => {
     await haptics.impact("Light");
 
-    if (Platform.OS === "web") {
+    if (Platform.OS === "web" && typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
       setIsPaused(false);

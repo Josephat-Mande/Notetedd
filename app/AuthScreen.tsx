@@ -191,11 +191,22 @@ export default function AuthScreen() {
   const handleSignUp = async () => {
     if (!validateInputs()) return;
 
+    // Guard: ensure auth and db are initialized
+    if (!auth || !db) {
+      showToast("error", "Error", "Authentication service not ready. Please try again.");
+      return;
+    }
+
     try {
       setIsLoading(true);
 
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
+
+      // Guard: ensure user was created
+      if (!user) {
+        throw new Error("Sign up succeeded but user object is null");
+      }
 
       await updateProfile(user, { displayName: fullName });
 
@@ -242,6 +253,12 @@ export default function AuthScreen() {
 
   const handleGoogleSignUp = async () => {
     try {
+      // signInWithPopup is web-only — avoid calling on native
+      if (Platform.OS !== 'web') {
+        showToast('error', 'Unsupported', 'Google web sign-up is not available on mobile. Use email sign-up or native Google sign-in.');
+        return;
+      }
+
       setIsLoading(true);
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
@@ -596,15 +613,15 @@ export default function AuthScreen() {
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* Divider */}
+                {/* Divider
                 <View style={styles.dividerContainer}>
                   <View style={styles.dividerLine} />
                   <Text style={styles.dividerText}>or continue with</Text>
                   <View style={styles.dividerLine} />
-                </View>
+                </View> */}
 
                 {/* Google Sign Up Button */}
-                <TouchableOpacity 
+                {/* <TouchableOpacity 
                   onPress={handleGoogleSignUp}
                   style={styles.googleButton}
                   disabled={isLoading}
@@ -612,7 +629,7 @@ export default function AuthScreen() {
                 >
                   <Icon name="login" size={22} color="#4285F4" />
                   <Text style={styles.googleButtonText}>Sign up with Google</Text>
-                </TouchableOpacity>
+                </TouchableOpacity> */}
 
                 {/* Features List */}
                 {/* <View style={styles.featuresContainer}>

@@ -400,25 +400,59 @@ export default function RecordScreen({ route }) {
       webSpeechRef.current = null;
     }
   };
-
-  // ==================== ASSEMBLYAI TRANSCRIPTION ====================
+// ==================== ASSEMBLYAI TRANSCRIPTION ====================
   const transcribeWithAssemblyAI = async (uri) => {
     try {
       console.log("🎯 Starting AssemblyAI transcription...");
+      console.log("📱 Platform:", Platform.OS);
+      console.log("📁 Audio URI:", uri);
 
       // Validate API key
       if (!ASSEMBLYAI_API_KEY || ASSEMBLYAI_API_KEY.length < 10) {
         throw new Error("AssemblyAI API key not configured. Please add your API key at the top of RecordScreen.js or use Real-time Mode instead.");
       }
 
-      // Step 1: Get audio blob
+      // Step 1: Get audio blob (platform-specific)
       console.log("📤 Reading audio file...");
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      let blob;
+
+      if (Platform.OS === "web") {
+        // Web: Fetch the blob directly
+        const response = await fetch(uri);
+        blob = await response.blob();
+      } else {
+        // Mobile (iOS/Android): Read file as base64 and convert to blob
+        console.log("📱 Reading mobile file...");
+        
+        // Check if file exists
+        const fileInfo = await FileSystem.getInfoAsync(uri);
+        console.log("📂 File info:", fileInfo);
+        
+        if (!fileInfo.exists) {
+          throw new Error("Recording file not found");
+        }
+
+        // Read as base64
+        const base64 = await FileSystem.readAsStringAsync(uri, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        
+        console.log("📦 Base64 length:", base64.length);
+
+        // Convert base64 to blob
+        const byteCharacters = atob(base64);
+        const byteNumbers = new Array(byteCharacters.length);
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
+        const byteArray = new Uint8Array(byteNumbers);
+        blob = new Blob([byteArray], { type: 'audio/m4a' });
+      }
+
       console.log("📦 Blob size:", blob.size, "bytes");
 
       if (blob.size === 0) {
-        throw new Error("Audio file is empty");
+        throw new Error("Audio file is empty - please record again");
       }
 
       // Step 2: Upload to AssemblyAI
@@ -427,14 +461,15 @@ export default function RecordScreen({ route }) {
         method: 'POST',
         headers: {
           'authorization': ASSEMBLYAI_API_KEY,
+          'Content-Type': 'application/octet-stream',
         },
         body: blob,
       });
 
       if (!uploadResponse.ok) {
         const errorText = await uploadResponse.text();
-        console.error("Upload error response:", errorText);
-        throw new Error(`Upload failed: ${uploadResponse.status} - Check your API key`);
+        console.error("❌ Upload error response:", errorText);
+        throw new Error(`Upload failed: ${uploadResponse.status} - ${errorText || 'Check your API key and internet connection'}`);
       }
 
       const uploadData = await uploadResponse.json();

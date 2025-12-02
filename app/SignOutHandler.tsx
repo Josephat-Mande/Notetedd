@@ -1,12 +1,13 @@
-// signOutHandler.js
+// app/SignOutHandler.tsx
+import { useEffect } from "react";
 import { getAuth, signOut } from "firebase/auth";
 import { Alert } from "react-native";
+import { useNavigation } from "expo-router";
 
-export async function handleSignOut(navigation) {
+async function handleSignOut(navigation) {
   const auth = getAuth();
   try {
     await signOut(auth);
-    // Navigate to your login screen or landing page
     navigation.reset({
       index: 0,
       routes: [{ name: "LoginScreen" }],
@@ -14,4 +15,14 @@ export async function handleSignOut(navigation) {
   } catch (error) {
     Alert.alert("Error", "Could not sign out. Please try again.");
   }
+}
+
+export default function SignOutHandler() {
+  const navigation = useNavigation();
+
+  useEffect(() => {
+    handleSignOut(navigation);
+  }, [navigation]);
+
+  return null; // nothing to render
 }

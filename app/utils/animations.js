@@ -1,4 +1,3 @@
-// utils/animations.js
 import { Animated } from 'react-native';
 
 export const fadeIn = (animatedValue, duration = 300) => {
@@ -34,4 +33,12 @@ export const entranceAnimation = (fadeAnim, scaleAnim, slideAnim) => {
     scaleUp(scaleAnim),
     slideIn(slideAnim),
   ]);
+};
+
+// Default export
+export default {
+  fadeIn,
+  scaleUp,
+  slideIn,
+  entranceAnimation,
 };

@@ -14,7 +14,7 @@ import { BlurView } from 'expo-blur';
 
 const { width, height } = Dimensions.get('window');
 
-const AchievementModal = ({ visible, achievement, onClose, theme = 'light' }) => {
+export const AchievementModal = ({ visible, achievement, onClose, theme = 'light' }) => {
   const isDark = theme === 'dark';
   
   // Animations
