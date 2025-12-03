@@ -8,7 +8,7 @@
     "assetBundlePatterns": [
       "**/*"
     ],
-    "icon": "./public/favicon.jpg",
+    "icon": "./public/icon.png",
     "scheme": "myapp",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
@@ -21,7 +21,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./public/icon.jpeg",
+        "foregroundImage": "./public/icon.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.notetedd.app"
@@ -29,7 +29,7 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./public/icon.jpeg"
+      "favicon": "./public/icon.png"
     },
     "plugins": [
       "expo-router",
@@ -37,7 +37,7 @@
       [
         "expo-splash-screen",
         {
-          "image": "./public/icon.jpeg",
+          "image": "./public/icon.png",
           "imageWidth": 200,
           "width": 1024,
           "height": 800,

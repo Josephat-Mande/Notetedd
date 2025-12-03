@@ -18,6 +18,7 @@ export default function SplashScreen() {
     width: Dimensions.get("window").width,
     height: Dimensions.get("window").height,
   });
+  
 
   useEffect(() => {
     // Handle window resize on web
@@ -40,10 +41,10 @@ export default function SplashScreen() {
   };
 
   // For web, we need to preload the image
-  const imageSource =
-    Platform.OS === "web"
-      ? { uri: "/splash-bg.jpg" }
-      : require("../public/splash-bg.jpg");
+  const imageSource = require("../assets/splash-bg.png");
+    // Platform.OS === "web"
+    //   ? { uri: "/splash-bg.png" }
+      
 
   return (
     <View style={styles.container}>
