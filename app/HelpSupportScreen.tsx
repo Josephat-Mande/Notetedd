@@ -86,9 +86,9 @@ export default function HelpSupportScreen({ navigation, route }) {
     {
       icon: "email",
       title: "Email Support",
-      subtitle: "support@notetedd.com",
+      subtitle: "notetedd@gmail.com",
       color: "#9B5DE5",
-      action: () => Linking.openURL("mailto:support@notetedd.com"),
+      action: () => Linking.openURL("mailto:notetedd@gmail.com"),
     },
     {
       icon: "chat",
@@ -100,9 +100,9 @@ export default function HelpSupportScreen({ navigation, route }) {
     {
       icon: "phone",
       title: "Call Us",
-      subtitle: "+1 (555) 123-4567",
+      subtitle: "+254704697508",
       color: "#3B82F6",
-      action: () => Linking.openURL("tel:+15551234567"),
+      action: () => Linking.openURL("tel:+254704697508"),
     },
     {
       icon: "forum",

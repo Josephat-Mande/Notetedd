@@ -5,7 +5,7 @@ import { Laptop2 } from "lucide-react";
 import { MaterialIcons } from "@expo/vector-icons";
 
 const dummyDevices = [
-  { id: "1", name: "Device A" },
+  { id: "1", name: "Samsung A" },
   { id: "2", name: "Device B" },
   { id: "3", name: "Device C" },
 ];
