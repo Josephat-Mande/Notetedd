@@ -26,6 +26,12 @@
       "type": "image/jpeg",
       "sizes": "512x512",
       "purpose": "maskable"
+    },
+    {
+      "src": "/adaptive-icon.jpg",
+      "type": "image/jpeg",
+      "sizes": "144x144",
+      "purpose": "any"
     }
   ],
   "start_url": "/",
@@ -38,12 +44,14 @@
     {
       "src": "/icon-192.jpg",
       "type": "image/jpeg",
-      "sizes": "192x192"
+      "sizes": "192x192",
+      "form_factor": "narrow"
     },
     {
-      "src": "/icon-512.jpg",
+      "src": "/adaptive-icon.jpg",
       "type": "image/jpeg",
-      "sizes": "512x512"
+      "sizes": "144x144",
+      "form_factor": "wide"
     }
   ]
 }
