@@ -17,6 +17,7 @@ import { getAuth, updateProfile } from "firebase/auth";
 import { getFirestore, doc, getDoc, updateDoc } from "firebase/firestore";
 import * as ImagePicker from "expo-image-picker";
 import haptics from "./utils/haptics";
+import BackButton from "../components/Backbutton";
 
 export default function ProfileScreen({ navigation, route }) {
   const theme = route?.params?.theme || "light";
@@ -168,12 +169,7 @@ export default function ProfileScreen({ navigation, route }) {
         colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
         style={styles.header}
       >
-        <TouchableOpacity 
-          style={styles.backButton} 
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
+        <BackButton />
         
         <Text style={styles.headerTitle}>My Profile</Text>
         

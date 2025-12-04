@@ -28,7 +28,7 @@
       "purpose": "maskable"
     },
     {
-      "src": "/icon.png",
+      "src": "/adaptive-icon.png",
       "type": "image/png",
       "sizes": "144x144",
       "purpose": "any"
@@ -48,8 +48,8 @@
       "form_factor": "narrow"
     },
     {
-      "src": "/icon-144.png",
-      "type": "image/png",
+      "src": "/adaptive-icon.png",
+      "type": "image/png    ",
       "sizes": "144x144",
       "form_factor": "wide"
     }

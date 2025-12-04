@@ -19,6 +19,7 @@ import PrintNotesScreen from "./PrintNotesScreen";
 import ExportNotesScreen from "./ExportNotesScreen";
 import PrivacyScreen from "./PrivacyScreen";
 import UploadPDFScreen from "./UploadPDFScreen";
+import Sidebar from "./Sidebar";
 import HelpSupportScreen from "./HelpSupportScreen";
 import PrefferencesScreen from "./PrefferencesScreen";
 import DarkModeScreen from "./DarkModeScreen";
@@ -136,6 +137,7 @@ export default function App() {
           <Stack.Screen name="PrefferencesScreen" component={PrefferencesScreen} />
           <Stack.Screen name="DarkModeScreen" component={DarkModeScreen} />
           <Stack.Screen name="ResetPasswordScreen" component={ResetPasswordScreen} />
+          <Stack.Screen name="Sidebar" component={Sidebar} />
         </Stack.Navigator>
       </NavigationContainer>
     </ErrorBoundary>

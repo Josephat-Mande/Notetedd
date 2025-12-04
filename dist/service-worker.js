@@ -3,11 +3,11 @@ const urlsToCache = [
   '/',
   '/index.html',
   '/manifest.json',
-  '/icon-192.jpg',
-  '/icon-512.jpg',
-  '/icon.jpg',
-  '/adaptive-icon.jpg',
-  '/splash-bg.jpg',
+  '/icon-192.png',
+  '/icon-512.png',
+  '/icon.png',
+  '/adaptive-icon.png',
+  '/splash-bg.png',
   '/favicon.ico'
 ];
 
@@ -82,7 +82,7 @@ self.addEventListener('fetch', (event) => {
       .catch(() => {
         // Return a fallback response if both cache and network fail
         if (request.destination === 'image') {
-          return caches.match('/icon-192.jpg');
+          return caches.match('/icon-192.png');
         }
         return new Response('Offline - resource not available', {
           status: 503,

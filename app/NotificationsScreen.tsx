@@ -12,6 +12,7 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import haptics from "./utils/haptics";
+import BackButton from "../components/Backbutton";
 
 export default function NotificationsScreen({ navigation, route }) {
   const theme = route?.params?.theme || "light";
@@ -159,7 +160,7 @@ export default function NotificationsScreen({ navigation, route }) {
           style={styles.backButton} 
           onPress={() => navigation.goBack()}
         >
-          <MaterialIcons name="arrow-back" size={24} color="#fff" />
+          <BackButton />
         </TouchableOpacity>
         
         <View style={styles.headerCenter}>

@@ -29,7 +29,8 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./public/icon.png"
+      "favicon": "./public/icon.png",
+      "permissions":["camera", "bluetooth"]
     },
     "plugins": [
       "expo-router",

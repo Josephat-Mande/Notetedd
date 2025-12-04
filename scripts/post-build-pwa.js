@@ -9,8 +9,9 @@
 const fs = require('fs');
 const path = require('path');
 
-const publicDir = path.join(__dirname, 'public');
-const distDir = path.join(__dirname, 'dist');
+const rootDir = path.join(__dirname, '..');
+const publicDir = path.join(rootDir, 'public');
+const distDir = path.join(rootDir, 'dist');
 
 console.log('🔧 Running PWA post-build configuration...');
 
