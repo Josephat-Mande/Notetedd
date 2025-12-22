@@ -9,36 +9,38 @@ import {
   Animated,
   ActivityIndicator,
   Platform,
+  FlatList,
+  TextInput,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Audio } from 'expo-av';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import haptics from "./utils/haptics";
-import { getFirestore, collection, query, where, orderBy, limit, getDocs } from "firebase/firestore";
+import { getFirestore, collection, query, where, orderBy, getDocs } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-// ==================== TTS APIs ====================
-// Multiple FREE Text-to-Speech options
-const GROQ_API_KEY = "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"; // Your Groq API key (for chat features)
+const GROQ_API_KEY = "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";
 
 export default function AudioNotesScreen({ navigation, route }) {
   const theme = route?.params?.theme || "light";
   const isDark = theme === "dark";
 
-  const [notes, setNotes] = useState(null);
+  // Screen state
+  const [viewMode, setViewMode] = useState("selection"); // "selection" or "player"
+  const [allNotes, setAllNotes] = useState([]);
+  const [selectedNote, setSelectedNote] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [filterCategory, setFilterCategory] = useState("all");
+  
+  // Player state
   const [isPlaying, setIsPlaying] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
-  const [sound, setSound] = useState(null);
-  const [playbackPosition, setPlaybackPosition] = useState(0);
-  const [playbackDuration, setPlaybackDuration] = useState(0);
-  const [audioReady, setAudioReady] = useState(false);
   const [generatingAudio, setGeneratingAudio] = useState(false);
-  const [currentSection, setCurrentSection] = useState(0);
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [selectedVoice, setSelectedVoice] = useState("default");
-  const [audioFormat, setAudioFormat] = useState("summary"); // summary, full, keypoints
+  const [audioFormat, setAudioFormat] = useState("summary");
 
   // Firebase
   const auth = getAuth();
@@ -52,19 +54,17 @@ export default function AudioNotesScreen({ navigation, route }) {
   useEffect(() => {
     console.log("🎵 AudioNotesScreen mounted");
     
-    // Entrance animation
     Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 600,
       useNativeDriver: true,
     }).start();
 
-    fetchNotes();
+    fetchAllNotes();
 
     return () => {
-      if (sound) {
-        console.log("🧹 Cleaning up audio...");
-        sound.unloadAsync();
+      if (typeof window !== 'undefined' && window.speechSynthesis) {
+        window.speechSynthesis.cancel();
       }
     };
   }, []);
@@ -112,45 +112,63 @@ export default function AudioNotesScreen({ navigation, route }) {
     Animated.parallel(animations).start();
   };
 
-  const fetchNotes = async () => {
+  // ==================== FETCH ALL NOTES ====================
+  const fetchAllNotes = async () => {
     try {
-      console.log("📚 Fetching notes for audio...");
+      console.log("📚 Fetching all notes...");
       setLoading(true);
+      const notes = [];
 
       const currentUser = auth.currentUser;
 
-      // Try Firestore first
+      // Fetch from Firestore
       if (currentUser) {
-        const recordingsRef = collection(db, "recordings");
-        const q = query(
-          recordingsRef,
-          where("userId", "==", currentUser.uid),
-          orderBy("createdAt", "desc"),
-          limit(1)
-        );
+        try {
+          const recordingsRef = collection(db, "recordings");
+          const q = query(
+            recordingsRef,
+            where("userId", "==", currentUser.uid),
+            orderBy("createdAt", "desc")
+          );
 
-        const querySnapshot = await getDocs(q);
+          const querySnapshot = await getDocs(q);
 
-        if (!querySnapshot.empty) {
-          const recordingData = querySnapshot.docs[0].data();
-          if (recordingData.organizedNotes) {
-            console.log("✅ Found notes in Firestore");
-            setNotes(recordingData.organizedNotes);
-            setLoading(false);
-            return;
-          }
+          querySnapshot.forEach((doc) => {
+            const data = doc.data();
+            if (data.organizedNotes) {
+              notes.push({
+                id: doc.id,
+                ...data,
+                source: "firestore",
+              });
+            }
+          });
+
+          console.log(`✅ Found ${notes.length} notes in Firestore`);
+        } catch (firestoreError) {
+          console.error("⚠️ Firestore fetch error:", firestoreError);
         }
       }
 
       // Fallback to AsyncStorage
-      const savedNotes = await AsyncStorage.getItem('organizedNotes');
-      if (savedNotes) {
-        console.log("✅ Found notes in AsyncStorage");
-        setNotes(JSON.parse(savedNotes));
-      } else {
-        console.log("⚠️ No notes found");
+      try {
+        const savedNotes = await AsyncStorage.getItem('organizedNotes');
+        if (savedNotes && notes.length === 0) {
+          const parsedNotes = JSON.parse(savedNotes);
+          notes.push({
+            id: 'local-1',
+            organizedNotes: parsedNotes,
+            title: parsedNotes.title || "Local Note",
+            createdAt: new Date(),
+            source: "local",
+          });
+          console.log("✅ Found notes in AsyncStorage");
+        }
+      } catch (storageError) {
+        console.error("⚠️ AsyncStorage error:", storageError);
       }
 
+      setAllNotes(notes);
     } catch (error) {
       console.error("❌ Fetch error:", error);
       Alert.alert("Error", "Failed to load notes");
@@ -159,10 +177,70 @@ export default function AudioNotesScreen({ navigation, route }) {
     }
   };
 
+  // ==================== FILTER NOTES ====================
+  const getFilteredNotes = () => {
+    let filtered = allNotes;
+
+    // Search filter
+    if (searchQuery) {
+      filtered = filtered.filter(note => {
+        const title = note.organizedNotes?.title || note.title || "";
+        const summary = note.organizedNotes?.summary || "";
+        const searchLower = searchQuery.toLowerCase();
+        return title.toLowerCase().includes(searchLower) || 
+               summary.toLowerCase().includes(searchLower);
+      });
+    }
+
+    return filtered;
+  };
+
+  // ==================== NOTE SELECTION ====================
+  const selectNote = async (note) => {
+    await haptics.impact("Medium");
+    setSelectedNote(note);
+    setViewMode("player");
+  };
+
+  const backToSelection = async () => {
+    await haptics.impact("Light");
+    
+    // Stop any playing audio
+    if (typeof window !== 'undefined' && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    
+    setIsPlaying(false);
+    setIsPaused(false);
+    setSelectedNote(null);
+    setViewMode("selection");
+  };
+
+  // ==================== FORMAT DATE ====================
+  const formatDate = (date) => {
+    if (!date) return "Unknown date";
+    
+    const d = date.toDate ? date.toDate() : new Date(date);
+    const now = new Date();
+    const diffMs = now - d;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins}m ago`;
+    if (diffHours < 24) return `${diffHours}h ago`;
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays}d ago`;
+    
+    return d.toLocaleDateString();
+  };
+
   // ==================== AUDIO GENERATION ====================
   const generateAudioScript = () => {
-    if (!notes) return "";
+    if (!selectedNote?.organizedNotes) return "";
 
+    const notes = selectedNote.organizedNotes;
     let script = "";
 
     switch (audioFormat) {
@@ -181,10 +259,12 @@ export default function AudioNotesScreen({ navigation, route }) {
       case "full":
         script = `${notes.title}. ${notes.summary}. `;
         script += `Key points: ${notes.keyPoints.join(". ")}. `;
-        notes.sections.forEach((section, i) => {
-          script += `Section ${i + 1}: ${section.title}. ${section.content}. `;
-        });
-        if (Object.keys(notes.definitions).length > 0) {
+        if (notes.sections && notes.sections.length > 0) {
+          notes.sections.forEach((section, i) => {
+            script += `Section ${i + 1}: ${section.title}. ${section.content}. `;
+          });
+        }
+        if (notes.definitions && Object.keys(notes.definitions).length > 0) {
           script += `Key definitions: `;
           Object.entries(notes.definitions).forEach(([term, def]) => {
             script += `${term}: ${def}. `;
@@ -202,25 +282,17 @@ export default function AudioNotesScreen({ navigation, route }) {
       setGeneratingAudio(true);
       console.log("🎙️ Generating audio with Web Speech...");
 
-          if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-            throw new Error("Text-to-Speech not supported in this environment");
-          }
+      if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+        throw new Error("Text-to-Speech not supported in this environment");
+      }
 
-          // Stop any existing speech
-          if (typeof window !== 'undefined' && window.speechSynthesis) {
-            window.speechSynthesis.cancel();
-          }
+      window.speechSynthesis.cancel();
 
       const script = generateAudioScript();
       const utterance = new SpeechSynthesisUtterance(script);
       
-      // Get available voices
-      const voices = (typeof window !== 'undefined' && window.speechSynthesis)
-        ? window.speechSynthesis.getVoices()
-        : [];
-      console.log("🎤 Available voices:", voices.length);
+      const voices = window.speechSynthesis.getVoices();
 
-      // Select voice based on preference
       if (selectedVoice === "female" && voices.length > 0) {
         const femaleVoice = voices.find(v => v.name.includes("Female") || v.name.includes("Samantha"));
         if (femaleVoice) utterance.voice = femaleVoice;
@@ -234,15 +306,12 @@ export default function AudioNotesScreen({ navigation, route }) {
       utterance.volume = 1.0;
 
       utterance.onstart = () => {
-        console.log("▶️ Audio started");
         setIsPlaying(true);
         setIsPaused(false);
-        setAudioReady(true);
         setGeneratingAudio(false);
       };
 
       utterance.onend = () => {
-        console.log("⏹️ Audio ended");
         setIsPlaying(false);
         setIsPaused(false);
       };
@@ -253,11 +322,8 @@ export default function AudioNotesScreen({ navigation, route }) {
         Alert.alert("Error", "Failed to generate audio");
       };
 
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        window.speechSynthesis.speak(utterance);
-        // Store reference for pause/resume
-        window.currentUtterance = utterance;
-      }
+      window.speechSynthesis.speak(utterance);
+      window.currentUtterance = utterance;
 
     } catch (error) {
       console.error("❌ Audio generation error:", error);
@@ -270,24 +336,19 @@ export default function AudioNotesScreen({ navigation, route }) {
     await haptics.impact("Light");
 
     if (Platform.OS === "web" && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      // Use Web Speech API
       if (isPlaying && isPaused) {
-        // Resume
         window.speechSynthesis.resume();
         setIsPaused(false);
       } else if (!isPlaying) {
-        // Start new
         await generateAudioWithWebSpeech();
       }
     } else {
-      // Mobile: Use Expo Audio (future implementation)
       Alert.alert("Coming Soon", "Audio playback is currently available on web. Mobile support coming soon!");
     }
   };
 
   const handlePause = async () => {
     await haptics.impact("Light");
-
     if (Platform.OS === "web" && typeof window !== 'undefined' && window.speechSynthesis && isPlaying) {
       window.speechSynthesis.pause();
       setIsPaused(true);
@@ -296,12 +357,10 @@ export default function AudioNotesScreen({ navigation, route }) {
 
   const handleStop = async () => {
     await haptics.impact("Light");
-
     if (Platform.OS === "web" && typeof window !== 'undefined' && window.speechSynthesis) {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
       setIsPaused(false);
-      setAudioReady(false);
     }
   };
 
@@ -312,7 +371,6 @@ export default function AudioNotesScreen({ navigation, route }) {
     const nextSpeed = speeds[(currentIndex + 1) % speeds.length];
     setPlaybackSpeed(nextSpeed);
 
-    // If currently playing, restart with new speed
     if (isPlaying && Platform.OS === "web") {
       window.speechSynthesis.cancel();
       setIsPlaying(false);
@@ -320,52 +378,123 @@ export default function AudioNotesScreen({ navigation, route }) {
     }
   };
 
-  const formatDuration = (seconds) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  // ==================== RENDER NOTE CARD ====================
+  const renderNoteCard = ({ item }) => {
+    const notes = item.organizedNotes;
+    if (!notes) return null;
+
+    const keyPointsCount = notes.keyPoints?.length || 0;
+    const sectionsCount = notes.sections?.length || 0;
+
+    return (
+      <TouchableOpacity
+        style={[styles.noteCard, isDark && styles.noteCardDark]}
+        onPress={() => selectNote(item)}
+        activeOpacity={0.7}
+      >
+        <View style={styles.noteCardHeader}>
+          <View style={styles.noteIconContainer}>
+            <MaterialIcons name="headphones" size={24} color="#9B5DE5" />
+          </View>
+          <View style={styles.noteCardInfo}>
+            <Text style={[styles.noteCardTitle, isDark && styles.textDark]} numberOfLines={1}>
+              {notes.title || "Untitled Note"}
+            </Text>
+            <Text style={[styles.noteCardDate, isDark && styles.textSecondaryDark]}>
+              {formatDate(item.createdAt)}
+            </Text>
+          </View>
+          <MaterialIcons name="chevron-right" size={24} color="#9CA3AF" />
+        </View>
+
+        <Text style={[styles.noteCardSummary, isDark && styles.textSecondaryDark]} numberOfLines={2}>
+          {notes.summary || "No summary available"}
+        </Text>
+
+        <View style={styles.noteCardStats}>
+          <View style={styles.noteCardStat}>
+            <MaterialIcons name="list" size={16} color="#10B981" />
+            <Text style={[styles.noteCardStatText, isDark && styles.textSecondaryDark]}>
+              {keyPointsCount} key points
+            </Text>
+          </View>
+          <View style={styles.noteCardStat}>
+            <MaterialIcons name="article" size={16} color="#9B5DE5" />
+            <Text style={[styles.noteCardStatText, isDark && styles.textSecondaryDark]}>
+              {sectionsCount} sections
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.noteCardFooter}>
+          <View style={[styles.sourceBadge, item.source === "firestore" ? styles.sourceBadgeCloud : styles.sourceBadgeLocal]}>
+            <MaterialIcons 
+              name={item.source === "firestore" ? "cloud" : "phone-android"} 
+              size={12} 
+              color="#FFFFFF" 
+            />
+            <Text style={styles.sourceBadgeText}>
+              {item.source === "firestore" ? "Cloud" : "Local"}
+            </Text>
+          </View>
+        </View>
+      </TouchableOpacity>
+    );
   };
 
-  return (
-    <View style={[styles.container, isDark && styles.containerDark]}>
-      {/* Header */}
-      <LinearGradient
-        colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
-        style={styles.header}
-      >
-        <View style={styles.headerPattern} />
-        <MaterialIcons name="headphones" size={32} color="rgba(255,255,255,0.3)" />
-        <Text style={styles.headerTitle}>Audio Notes</Text>
-        <Text style={styles.headerSubtitle}>Listen to your notes on the go</Text>
-      </LinearGradient>
+  // ==================== RENDER SELECTION VIEW ====================
+  const renderSelectionView = () => (
+    <Animated.View style={{ opacity: fadeAnim }}>
+      {/* Search Bar */}
+      <View style={[styles.searchContainer, isDark && styles.searchContainerDark]}>
+        <MaterialIcons name="search" size={20} color="#9CA3AF" />
+        <TextInput
+          style={[styles.searchInput, isDark && styles.textDark]}
+          placeholder="Search notes..."
+          placeholderTextColor="#9CA3AF"
+          value={searchQuery}
+          onChangeText={setSearchQuery}
+        />
+        {searchQuery.length > 0 && (
+          <TouchableOpacity onPress={() => setSearchQuery("")}>
+            <MaterialIcons name="close" size={20} color="#9CA3AF" />
+          </TouchableOpacity>
+        )}
+      </View>
 
-      <ScrollView 
-        style={styles.content}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={styles.scrollContent}
-      >
-        {loading ? (
-          <Animated.View style={[styles.loadingContainer, { opacity: fadeAnim }]}>
-            <ActivityIndicator size="large" color="#9B5DE5" />
-            <Text style={[styles.loadingText, isDark && styles.textDark]}>
-              Loading your notes...
-            </Text>
-          </Animated.View>
-        ) : !notes ? (
-          <Animated.View 
-            style={[
-              styles.emptyContainer,
-              isDark && styles.emptyContainerDark,
-              { opacity: fadeAnim }
-            ]}
-          >
-            <MaterialIcons name="library-music" size={64} color="#D1D5DB" />
-            <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
-              No Notes Available
-            </Text>
-            <Text style={[styles.emptyText, isDark && styles.textSecondaryDark]}>
-              Record and organize a lecture first to generate audio notes
-            </Text>
+      {/* Stats Card */}
+      <View style={[styles.statsCard, isDark && styles.statsCardDark]}>
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, isDark && styles.textDark]}>{allNotes.length}</Text>
+          <Text style={[styles.statLabel, isDark && styles.textSecondaryDark]}>Total Notes</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <Text style={[styles.statNumber, isDark && styles.textDark]}>
+            {allNotes.filter(n => n.source === "firestore").length}
+          </Text>
+          <Text style={[styles.statLabel, isDark && styles.textSecondaryDark]}>In Cloud</Text>
+        </View>
+        <View style={styles.statDivider} />
+        <View style={styles.statItem}>
+          <MaterialIcons name="audiotrack" size={32} color="#10B981" />
+          <Text style={[styles.statLabel, isDark && styles.textSecondaryDark]}>Ready to Listen</Text>
+        </View>
+      </View>
+
+      {/* Notes List */}
+      {getFilteredNotes().length === 0 ? (
+        <View style={[styles.emptyContainer, isDark && styles.emptyContainerDark]}>
+          <MaterialIcons name="library-music" size={64} color="#D1D5DB" />
+          <Text style={[styles.emptyTitle, isDark && styles.textDark]}>
+            {searchQuery ? "No matching notes" : "No Notes Available"}
+          </Text>
+          <Text style={[styles.emptyText, isDark && styles.textSecondaryDark]}>
+            {searchQuery 
+              ? "Try a different search term" 
+              : "Record and organize a lecture first to generate audio notes"}
+          </Text>
+          {!searchQuery && (
             <TouchableOpacity 
               style={styles.goToNotesButton}
               onPress={() => navigation.navigate("RecordScreen")}
@@ -378,351 +507,276 @@ export default function AudioNotesScreen({ navigation, route }) {
                 <Text style={styles.goToNotesText}>Record Lecture</Text>
               </LinearGradient>
             </TouchableOpacity>
-          </Animated.View>
-        ) : (
-          <Animated.View style={{ opacity: fadeAnim }}>
-            {/* Player Card */}
-            <View style={[styles.playerCard, isDark && styles.playerCardDark]}>
-              {/* Lecture Info */}
-              <View style={styles.lectureInfo}>
-                <Text style={[styles.lectureTitle, isDark && styles.textDark]}>
-                  {notes.title}
-                </Text>
-                <Text style={[styles.lectureSummary, isDark && styles.textSecondaryDark]}>
-                  {notes.summary.substring(0, 100)}...
-                </Text>
-              </View>
+          )}
+        </View>
+      ) : (
+        <FlatList
+          data={getFilteredNotes()}
+          renderItem={renderNoteCard}
+          keyExtractor={(item) => item.id}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.notesList}
+        />
+      )}
+    </Animated.View>
+  );
 
-              {/* Audio Visualizer */}
-              <View style={styles.visualizerContainer}>
-                {isPlaying && !isPaused ? (
-                  <View style={styles.wavesContainer}>
-                    {waveAnims.map((anim, index) => (
-                      <Animated.View
-                        key={index}
-                        style={[
-                          styles.wave,
-                          {
-                            height: anim.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [20, 60],
-                            }),
-                            opacity: anim.interpolate({
-                              inputRange: [0, 1],
-                              outputRange: [0.3, 1],
-                            }),
-                          },
-                        ]}
-                      />
-                    ))}
-                  </View>
-                ) : (
-                  <View style={styles.staticWaves}>
-                    {[...Array(5)].map((_, i) => (
-                      <View key={i} style={styles.staticWave} />
-                    ))}
-                  </View>
-                )}
-              </View>
+  // ==================== RENDER PLAYER VIEW ====================
+  const renderPlayerView = () => {
+    if (!selectedNote?.organizedNotes) return null;
+    const notes = selectedNote.organizedNotes;
 
-              {/* Play Button */}
-              <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                <TouchableOpacity
-                  style={[
-                    styles.playButton,
-                    isPlaying && styles.playButtonActive,
-                  ]}
-                  onPress={isPlaying && !isPaused ? handlePause : handlePlay}
-                  disabled={generatingAudio}
-                >
-                  <LinearGradient
-                    colors={
-                      isPlaying && !isPaused
-                        ? ["#F59E0B", "#D97706"]
-                        : ["#10B981", "#059669"]
-                    }
-                    style={styles.playButtonGradient}
-                  >
-                    {generatingAudio ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <MaterialIcons
-                        name={isPlaying && !isPaused ? "pause" : "play-arrow"}
-                        size={48}
-                        color="#fff"
-                      />
-                    )}
-                  </LinearGradient>
-                </TouchableOpacity>
-              </Animated.View>
+    return (
+      <Animated.View style={{ opacity: fadeAnim }}>
+        {/* Back Button */}
+        <TouchableOpacity 
+          style={[styles.backButton, isDark && styles.backButtonDark]}
+          onPress={backToSelection}
+        >
+          <MaterialIcons name="arrow-back" size={24} color={isDark ? "#F9FAFB" : "#1F2937"} />
+          <Text style={[styles.backButtonText, isDark && styles.textDark]}>Back to Notes</Text>
+        </TouchableOpacity>
 
-              {/* Controls */}
-              <View style={styles.controls}>
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={handleStop}
-                  disabled={!isPlaying}
-                >
-                  <MaterialIcons
-                    name="stop"
-                    size={28}
-                    color={isPlaying ? (isDark ? "#F9FAFB" : "#1F2937") : "#9CA3AF"}
+        {/* Player Card */}
+        <View style={[styles.playerCard, isDark && styles.playerCardDark]}>
+          <View style={styles.lectureInfo}>
+            <Text style={[styles.lectureTitle, isDark && styles.textDark]}>
+              {notes.title}
+            </Text>
+            <Text style={[styles.lectureSummary, isDark && styles.textSecondaryDark]}>
+              {notes.summary.substring(0, 120)}...
+            </Text>
+          </View>
+
+          {/* Audio Visualizer */}
+          <View style={styles.visualizerContainer}>
+            {isPlaying && !isPaused ? (
+              <View style={styles.wavesContainer}>
+                {waveAnims.map((anim, index) => (
+                  <Animated.View
+                    key={index}
+                    style={[
+                      styles.wave,
+                      {
+                        height: anim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [20, 60],
+                        }),
+                        opacity: anim.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.3, 1],
+                        }),
+                      },
+                    ]}
                   />
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.controlButton}
-                  onPress={changePlaybackSpeed}
-                >
-                  <Text style={[styles.speedText, isDark && styles.textDark]}>
-                    {playbackSpeed}x
-                  </Text>
-                </TouchableOpacity>
+                ))}
               </View>
-
-              {/* Status */}
-              <Text style={[styles.statusText, isDark && styles.textSecondaryDark]}>
-                {generatingAudio
-                  ? "Generating audio..."
-                  : isPlaying && isPaused
-                  ? "Paused"
-                  : isPlaying
-                  ? "Playing"
-                  : "Ready to play"}
-              </Text>
-            </View>
-
-            {/* Audio Format Selection */}
-            <View style={[styles.section, isDark && styles.sectionDark]}>
-              <View style={styles.sectionHeader}>
-                <MaterialIcons name="tune" size={24} color="#9B5DE5" />
-                <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
-                  Audio Content
-                </Text>
-              </View>
-
-              <View style={styles.formatButtons}>
-                <TouchableOpacity
-                  style={[
-                    styles.formatButton,
-                    audioFormat === "summary" && styles.formatButtonActive,
-                    isDark && styles.formatButtonDark,
-                  ]}
-                  onPress={async () => {
-                    await haptics.impact("Light");
-                    setAudioFormat("summary");
-                    if (isPlaying) handleStop();
-                  }}
-                >
-                  <MaterialIcons
-                    name="summarize"
-                    size={20}
-                    color={audioFormat === "summary" ? "#9B5DE5" : "#6B7280"}
-                  />
-                  <Text
-                    style={[
-                      styles.formatButtonText,
-                      audioFormat === "summary" && styles.formatButtonTextActive,
-                      isDark && styles.textDark,
-                    ]}
-                  >
-                    Summary
-                  </Text>
-                  <Text style={styles.formatBadge}>~2 min</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.formatButton,
-                    audioFormat === "keypoints" && styles.formatButtonActive,
-                    isDark && styles.formatButtonDark,
-                  ]}
-                  onPress={async () => {
-                    await haptics.impact("Light");
-                    setAudioFormat("keypoints");
-                    if (isPlaying) handleStop();
-                  }}
-                >
-                  <MaterialIcons
-                    name="star"
-                    size={20}
-                    color={audioFormat === "keypoints" ? "#9B5DE5" : "#6B7280"}
-                  />
-                  <Text
-                    style={[
-                      styles.formatButtonText,
-                      audioFormat === "keypoints" && styles.formatButtonTextActive,
-                      isDark && styles.textDark,
-                    ]}
-                  >
-                    Key Points
-                  </Text>
-                  <Text style={styles.formatBadge}>~3 min</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.formatButton,
-                    audioFormat === "full" && styles.formatButtonActive,
-                    isDark && styles.formatButtonDark,
-                  ]}
-                  onPress={async () => {
-                    await haptics.impact("Light");
-                    setAudioFormat("full");
-                    if (isPlaying) handleStop();
-                  }}
-                >
-                  <MaterialIcons
-                    name="article"
-                    size={20}
-                    color={audioFormat === "full" ? "#9B5DE5" : "#6B7280"}
-                  />
-                  <Text
-                    style={[
-                      styles.formatButtonText,
-                      audioFormat === "full" && styles.formatButtonTextActive,
-                      isDark && styles.textDark,
-                    ]}
-                  >
-                    Full Notes
-                  </Text>
-                  <Text style={styles.formatBadge}>~5 min</Text>
-                </TouchableOpacity>
-              </View>
-
-              <Text style={[styles.formatDescription, isDark && styles.textSecondaryDark]}>
-                {audioFormat === "summary"
-                  ? "Quick overview with main points"
-                  : audioFormat === "keypoints"
-                  ? "Detailed key takeaways"
-                  : "Complete lecture content with definitions"}
-              </Text>
-            </View>
-
-            {/* Voice Selection */}
-            <View style={[styles.section, isDark && styles.sectionDark]}>
-              <View style={styles.sectionHeader}>
-                <MaterialIcons name="record-voice-over" size={24} color="#10B981" />
-                <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
-                  Voice Style
-                </Text>
-              </View>
-
-              <View style={styles.voiceButtons}>
-                <TouchableOpacity
-                  style={[
-                    styles.voiceButton,
-                    selectedVoice === "default" && styles.voiceButtonActive,
-                    isDark && styles.voiceButtonDark,
-                  ]}
-                  onPress={async () => {
-                    await haptics.impact("Light");
-                    setSelectedVoice("default");
-                    if (isPlaying) handleStop();
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.voiceButtonText,
-                      selectedVoice === "default" && styles.voiceButtonTextActive,
-                      isDark && styles.textDark,
-                    ]}
-                  >
-                    Default
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.voiceButton,
-                    selectedVoice === "female" && styles.voiceButtonActive,
-                    isDark && styles.voiceButtonDark,
-                  ]}
-                  onPress={async () => {
-                    await haptics.impact("Light");
-                    setSelectedVoice("female");
-                    if (isPlaying) handleStop();
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.voiceButtonText,
-                      selectedVoice === "female" && styles.voiceButtonTextActive,
-                      isDark && styles.textDark,
-                    ]}
-                  >
-                    Female
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[
-                    styles.voiceButton,
-                    selectedVoice === "male" && styles.voiceButtonActive,
-                    isDark && styles.voiceButtonDark,
-                  ]}
-                  onPress={async () => {
-                    await haptics.impact("Light");
-                    setSelectedVoice("male");
-                    if (isPlaying) handleStop();
-                  }}
-                >
-                  <Text
-                    style={[
-                      styles.voiceButtonText,
-                      selectedVoice === "male" && styles.voiceButtonTextActive,
-                      isDark && styles.textDark,
-                    ]}
-                  >
-                    Male
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Features */}
-            <View style={[styles.featuresCard, isDark && styles.featuresCardDark]}>
-              <Text style={[styles.featuresTitle, isDark && styles.textDark]}>
-                ✨ Features
-              </Text>
-              <View style={styles.featuresList}>
-                <View style={styles.featureItem}>
-                  <MaterialIcons name="speed" size={20} color="#10B981" />
-                  <Text style={[styles.featureText, isDark && styles.textSecondaryDark]}>
-                    Adjustable playback speed (0.75x - 2.0x)
-                  </Text>
-                </View>
-                <View style={styles.featureItem}>
-                  <MaterialIcons name="pause" size={20} color="#10B981" />
-                  <Text style={[styles.featureText, isDark && styles.textSecondaryDark]}>
-                    Pause and resume anytime
-                  </Text>
-                </View>
-                <View style={styles.featureItem}>
-                  <MaterialIcons name="offline-bolt" size={20} color="#10B981" />
-                  <Text style={[styles.featureText, isDark && styles.textSecondaryDark]}>
-                    Works offline (Web Speech API)
-                  </Text>
-                </View>
-                <View style={styles.featureItem}>
-                  <MaterialIcons name="no-accounts" size={20} color="#10B981" />
-                  <Text style={[styles.featureText, isDark && styles.textSecondaryDark]}>
-                    100% free - no API keys needed
-                  </Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Platform Notice */}
-            {Platform.OS !== "web" && (
-              <View style={[styles.noticeCard, isDark && styles.noticeCardDark]}>
-                <MaterialIcons name="info-outline" size={24} color="#F59E0B" />
-                <Text style={[styles.noticeText, isDark && styles.textDark]}>
-                  Audio playback is currently optimized for web browsers. Mobile support coming soon!
-                </Text>
+            ) : (
+              <View style={styles.staticWaves}>
+                {[...Array(5)].map((_, i) => (
+                  <View key={i} style={styles.staticWave} />
+                ))}
               </View>
             )}
+          </View>
+
+          {/* Play Button */}
+          <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+            <TouchableOpacity
+              style={[styles.playButton, isPlaying && styles.playButtonActive]}
+              onPress={isPlaying && !isPaused ? handlePause : handlePlay}
+              disabled={generatingAudio}
+            >
+              <LinearGradient
+                colors={
+                  isPlaying && !isPaused
+                    ? ["#F59E0B", "#D97706"]
+                    : ["#10B981", "#059669"]
+                }
+                style={styles.playButtonGradient}
+              >
+                {generatingAudio ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <MaterialIcons
+                    name={isPlaying && !isPaused ? "pause" : "play-arrow"}
+                    size={48}
+                    color="#fff"
+                  />
+                )}
+              </LinearGradient>
+            </TouchableOpacity>
           </Animated.View>
+
+          {/* Controls */}
+          <View style={styles.controls}>
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={handleStop}
+              disabled={!isPlaying}
+            >
+              <MaterialIcons
+                name="stop"
+                size={28}
+                color={isPlaying ? (isDark ? "#F9FAFB" : "#1F2937") : "#9CA3AF"}
+              />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.controlButton}
+              onPress={changePlaybackSpeed}
+            >
+              <Text style={[styles.speedText, isDark && styles.textDark]}>
+                {playbackSpeed}x
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={[styles.statusText, isDark && styles.textSecondaryDark]}>
+            {generatingAudio
+              ? "Generating audio..."
+              : isPlaying && isPaused
+              ? "Paused"
+              : isPlaying
+              ? "Playing"
+              : "Ready to play"}
+          </Text>
+        </View>
+
+        {/* Audio Format Selection */}
+        <View style={[styles.section, isDark && styles.sectionDark]}>
+          <View style={styles.sectionHeader}>
+            <MaterialIcons name="tune" size={24} color="#9B5DE5" />
+            <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+              Audio Content
+            </Text>
+          </View>
+
+          <View style={styles.formatButtons}>
+            {[
+              { key: "summary", icon: "summarize", label: "Summary", time: "~2 min" },
+              { key: "keypoints", icon: "star", label: "Key Points", time: "~3 min" },
+              { key: "full", icon: "article", label: "Full Notes", time: "~5 min" },
+            ].map((format) => (
+              <TouchableOpacity
+                key={format.key}
+                style={[
+                  styles.formatButton,
+                  audioFormat === format.key && styles.formatButtonActive,
+                  isDark && styles.formatButtonDark,
+                ]}
+                onPress={async () => {
+                  await haptics.impact("Light");
+                  setAudioFormat(format.key);
+                  if (isPlaying) handleStop();
+                }}
+              >
+                <MaterialIcons
+                  name={format.icon}
+                  size={20}
+                  color={audioFormat === format.key ? "#9B5DE5" : "#6B7280"}
+                />
+                <Text
+                  style={[
+                    styles.formatButtonText,
+                    audioFormat === format.key && styles.formatButtonTextActive,
+                    isDark && styles.textDark,
+                  ]}
+                >
+                  {format.label}
+                </Text>
+                <Text style={styles.formatBadge}>{format.time}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Voice Selection */}
+        <View style={[styles.section, isDark && styles.sectionDark]}>
+          <View style={styles.sectionHeader}>
+            <MaterialIcons name="record-voice-over" size={24} color="#10B981" />
+            <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+              Voice Style
+            </Text>
+          </View>
+
+          <View style={styles.voiceButtons}>
+            {["default", "female", "male"].map((voice) => (
+              <TouchableOpacity
+                key={voice}
+                style={[
+                  styles.voiceButton,
+                  selectedVoice === voice && styles.voiceButtonActive,
+                  isDark && styles.voiceButtonDark,
+                ]}
+                onPress={async () => {
+                  await haptics.impact("Light");
+                  setSelectedVoice(voice);
+                  if (isPlaying) handleStop();
+                }}
+              >
+                <Text
+                  style={[
+                    styles.voiceButtonText,
+                    selectedVoice === voice && styles.voiceButtonTextActive,
+                    isDark && styles.textDark,
+                  ]}
+                >
+                  {voice.charAt(0).toUpperCase() + voice.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+        </View>
+
+        {/* Platform Notice */}
+        {Platform.OS !== "web" && (
+          <View style={[styles.noticeCard, isDark && styles.noticeCardDark]}>
+            <MaterialIcons name="info-outline" size={24} color="#F59E0B" />
+            <Text style={[styles.noticeText, isDark && styles.textDark]}>
+              Audio playback is currently optimized for web browsers. Mobile support coming soon!
+            </Text>
+          </View>
+        )}
+      </Animated.View>
+    );
+  };
+
+  return (
+    <View style={[styles.container, isDark && styles.containerDark]}>
+      {/* Header */}
+      <LinearGradient
+        colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
+        style={styles.header}
+      >
+        <View style={styles.headerPattern} />
+        <MaterialIcons name="headphones" size={32} color="rgba(255,255,255,0.3)" />
+        <Text style={styles.headerTitle}>
+          {viewMode === "selection" ? "Audio Notes Library" : "Now Playing"}
+        </Text>
+        <Text style={styles.headerSubtitle}>
+          {viewMode === "selection" 
+            ? "Select notes to listen" 
+            : "Listen to your notes on the go"}
+        </Text>
+      </LinearGradient>
+
+      <ScrollView 
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+      >
+        {loading ? (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="large" color="#9B5DE5" />
+            <Text style={[styles.loadingText, isDark && styles.textDark]}>
+              Loading your notes library...
+            </Text>
+          </View>
+        ) : viewMode === "selection" ? (
+          renderSelectionView()
+        ) : (
+          renderPlayerView()
         )}
       </ScrollView>
     </View>
@@ -738,8 +792,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#0F172A",
   },
   header: {
-    paddingTop: 60,
-    paddingBottom: 40,
+    paddingTop: 20,
+    paddingBottom: 20,
     paddingHorizontal: 24,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
@@ -782,6 +836,152 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     marginTop: 16,
   },
+  // Selection View Styles
+  searchContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+    gap: 12,
+  },
+  searchContainerDark: {
+    backgroundColor: "#1F2937",
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: 15,
+    color: "#1F2937",
+  },
+  statsCard: {
+    flexDirection: "row",
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 20,
+    marginBottom: 24,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 4,
+  },
+  statsCardDark: {
+    backgroundColor: "#1F2937",
+  },
+  statItem: {
+    flex: 1,
+    alignItems: "center",
+  },
+  statNumber: {
+    fontSize: 32,
+    fontWeight: "bold",
+    color: "#9B5DE5",
+    marginBottom: 4,
+  },
+  statLabel: {
+    fontSize: 12,
+    color: "#6B7280",
+    textAlign: "center",
+  },
+  statDivider: {
+    width: 1,
+    backgroundColor: "#E5E7EB",
+    marginHorizontal: 16,
+  },
+  notesList: {
+    paddingBottom: 20,
+  },
+  noteCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 20,
+    padding: 16,
+    marginBottom: 16,
+    shadowColor: "#000",
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  noteCardDark: {
+    backgroundColor: "#1F2937",
+  },
+  noteCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 12,
+    gap: 12,
+  },
+  noteIconContainer: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "#F3E8FF",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  noteCardInfo: {
+    flex: 1,
+  },
+  noteCardTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1F2937",
+    marginBottom: 4,
+  },
+  noteCardDate: {
+    fontSize: 12,
+    color: "#9CA3AF",
+  },
+  noteCardSummary: {
+    fontSize: 14,
+    color: "#6B7280",
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  noteCardStats: {
+    flexDirection: "row",
+    gap: 16,
+    marginBottom: 12,
+  },
+  noteCardStat: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  noteCardStatText: {
+    fontSize: 12,
+    color: "#6B7280",
+  },
+  noteCardFooter: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+  },
+  sourceBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  sourceBadgeCloud: {
+    backgroundColor: "#10B981",
+  },
+  sourceBadgeLocal: {
+    backgroundColor: "#6B7280",
+  },
+  sourceBadgeText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
   emptyContainer: {
     backgroundColor: "#FFFFFF",
     borderRadius: 24,
@@ -820,10 +1020,35 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
+  // Player View Styles
+  backButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    alignSelf: "flex-start",
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 12,
+    marginBottom: 20,
+    gap: 8,
+    shadowColor: "#000",
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 2,
+  },
+  backButtonDark: {
+    backgroundColor: "#1F2937",
+  },
+  backButtonText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#1F2937",
+  },
   playerCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 24,
-    padding: 32,
+    padding: 24,
     marginBottom: 20,
     elevation: 4,
     shadowColor: "#000",
@@ -853,7 +1078,7 @@ const styles = StyleSheet.create({
     lineHeight: 20,
   },
   visualizerContainer: {
-    height: 80,
+    height: 40,
     width: "100%",
     justifyContent: "center",
     alignItems: "center",
@@ -922,7 +1147,7 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
-    padding: 20,
+    padding: 10,
     marginBottom: 16,
     elevation: 2,
     shadowColor: "#000",
@@ -980,11 +1205,6 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
     fontWeight: "600",
   },
-  formatDescription: {
-    fontSize: 13,
-    color: "#6B7280",
-    fontStyle: "italic",
-  },
   voiceButtons: {
     flexDirection: "row",
     gap: 12,
@@ -1012,40 +1232,6 @@ const styles = StyleSheet.create({
   },
   voiceButtonTextActive: {
     color: "#059669",
-  },
-  featuresCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 16,
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-  },
-  featuresCardDark: {
-    backgroundColor: "#1F2937",
-  },
-  featuresTitle: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: "#1F2937",
-    marginBottom: 16,
-  },
-  featuresList: {
-    gap: 12,
-  },
-  featureItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  featureText: {
-    flex: 1,
-    fontSize: 14,
-    color: "#4B5563",
-    lineHeight: 20,
   },
   noticeCard: {
     backgroundColor: "#FEF3C7",

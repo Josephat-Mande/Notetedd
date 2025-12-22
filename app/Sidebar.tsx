@@ -163,7 +163,7 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
       title: "Content",
       items: [
         { icon: Download, label: "Export Notes", screen: "ExportNotesScreen", badge: null },
-        { icon: Upload, label: "Upload PDF", screen: "UploadPDFScreen", badge: null },
+        { icon: Upload, label: "Upload File", screen: "UploadPDFScreen", badge: null },
         { icon: Printer, label: "Print Notes", screen: "PrintNotesScreen", badge: null },
       ],
     },

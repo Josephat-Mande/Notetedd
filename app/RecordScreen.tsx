@@ -10,8 +10,8 @@ import {
   Animated,
   Dimensions,
   Share,
-  Clipboard,
   Switch,
+  ActivityIndicator,
 } from "react-native";
 import { Audio } from "expo-av";
 import * as FileSystem from "expo-file-system";
@@ -21,14 +21,13 @@ import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import haptics from "./utils/haptics";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { getFirestore, collection, addDoc, serverTimestamp } from "firebase/firestore";
+import { getFirestore, collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs, doc, updateDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const { width } = Dimensions.get("window");
 
 // IMPORTANT: Replace with your actual AssemblyAI API key
-// Get your free API key at: https://www.assemblyai.com/
-const ASSEMBLYAI_API_KEY = "83b66f41846a49c19d62893c24e0ce34"; // <-- PASTE YOUR API KEY HERE (leave empty to use Web Speech only)
+const ASSEMBLYAI_API_KEY = "83b66f41846a49c19d62893c24e0ce34";
 
 const RECORDING_OPTIONS = {
   android: {
@@ -53,6 +52,19 @@ const RECORDING_OPTIONS = {
   },
 };
 
+const SUPPORTED_LANGUAGES = [
+  { code: "en", name: "English", flag: "🇺🇸", speechCode: "en-US" },
+  { code: "es", name: "Spanish", flag: "🇪🇸", speechCode: "es-ES" },
+  { code: "fr", name: "French", flag: "🇫🇷", speechCode: "fr-FR" },
+  { code: "de", name: "German", flag: "🇩🇪", speechCode: "de-DE" },
+  { code: "sw", name: "Kiswahili", flag: "🇰🇪", speechCode: "sw-KE" },
+  { code: "ar", name: "Arabic", flag: "🇸🇦", speechCode: "ar-SA" },
+  { code: "zh", name: "Chinese", flag: "🇨🇳", speechCode: "zh-CN" },
+  { code: "hi", name: "Hindi", flag: "🇮🇳", speechCode: "hi-IN" },
+  { code: "pt", name: "Portuguese", flag: "🇧🇷", speechCode: "pt-BR" },
+  { code: "ja", name: "Japanese", flag: "🇯🇵", speechCode: "ja-JP" },
+];
+
 export default function RecordScreen({ route }) {
   const theme = route?.params?.theme || "light";
   const isDark = theme === "dark";
@@ -65,8 +77,14 @@ export default function RecordScreen({ route }) {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [recordingUri, setRecordingUri] = useState(null);
-  const [transcriptionMethod, setTranscriptionMethod] = useState("auto");
   const [useWebSpeech, setUseWebSpeech] = useState(false);
+  const [sourceLanguage, setSourceLanguage] = useState("en");
+  const [targetLanguage, setTargetLanguage] = useState("en");
+  const [detectedLanguages, setDetectedLanguages] = useState([]);
+  const [previousRecordings, setPreviousRecordings] = useState([]);
+  const [loadingRecordings, setLoadingRecordings] = useState(true);
+  const [showAllRecordings, setShowAllRecordings] = useState(false);
+  const [continuingRecordingId, setContinuingRecordingId] = useState(null);
   
   const recordingRef = useRef(null);
   const webSpeechRef = useRef(null);
@@ -74,9 +92,7 @@ export default function RecordScreen({ route }) {
   
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
-  const waveAnims = useRef([...Array(5)].map(() => new Animated.Value(0))).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(50)).current;
 
   // Firebase instances
   const auth = getAuth();
@@ -85,27 +101,18 @@ export default function RecordScreen({ route }) {
 
   useEffect(() => {
     console.log("🎙️ RecordScreen mounted");
-    console.log("📱 Platform:", Platform.OS);
-    console.log("🔑 AssemblyAI Key configured:", !!ASSEMBLYAI_API_KEY && ASSEMBLYAI_API_KEY.length > 10);
-    console.log("🌐 Web Speech supported:", typeof window !== 'undefined' && 'webkitSpeechRecognition' in window);
     
     // Entrance animation
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: true,
-      }),
-      Animated.spring(slideAnim, {
-        toValue: 0,
-        tension: 50,
-        friction: 8,
-        useNativeDriver: true,
-      }),
-    ]).start();
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 600,
+      useNativeDriver: true,
+    }).start();
+
+    // Load previous recordings
+    loadPreviousRecordings();
 
     return () => {
-      console.log("🎙️ Cleanup...");
       if (recordingRef.current) {
         stopRecording().catch(console.error);
       }
@@ -120,7 +127,6 @@ export default function RecordScreen({ route }) {
 
   useEffect(() => {
     if (isRecording && !isPaused) {
-      // Pulse animation
       Animated.loop(
         Animated.sequence([
           Animated.timing(pulseAnim, {
@@ -136,10 +142,6 @@ export default function RecordScreen({ route }) {
         ])
       ).start();
 
-      // Wave animations
-      animateWaves();
-
-      // Start timer
       timerRef.current = setInterval(() => {
         setRecordingDuration(prev => prev + 1);
       }, 1000);
@@ -157,28 +159,6 @@ export default function RecordScreen({ route }) {
     };
   }, [isRecording, isPaused]);
 
-  const animateWaves = () => {
-    const animations = waveAnims.map((anim, index) => 
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(anim, {
-            toValue: 1,
-            duration: 800,
-            delay: index * 100,
-            useNativeDriver: true,
-          }),
-          Animated.timing(anim, {
-            toValue: 0,
-            duration: 800,
-            useNativeDriver: true,
-          }),
-        ])
-      )
-    );
-
-    Animated.parallel(animations).start();
-  };
-
   const formatDuration = (seconds) => {
     const hrs = Math.floor(seconds / 3600);
     const mins = Math.floor((seconds % 3600) / 60);
@@ -188,6 +168,92 @@ export default function RecordScreen({ route }) {
       return `${hrs.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
     }
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
+  // ==================== LANGUAGE DETECTION ====================
+  const detectLanguageFromText = (text) => {
+    const patterns = {
+      'sw': /\b(sasa|habari|asante|tafadhali|ndiyo|hapana|kwaheri|karibu|pole|shikamoo)\b/i,
+      'es': /\b(gracias|por favor|sí|no|hola|adiós|buenos días|buenas tardes|cómo estás)\b/i,
+      'fr': /\b(merci|s'il vous plaît|oui|non|bonjour|au revoir|comment allez-vous)\b/i,
+      'de': /\b(danke|bitte|ja|nein|hallo|auf wiedersehen|guten tag|wie geht es)\b/i,
+      'ar': /[\u0600-\u06FF]/,
+      'zh': /[\u4e00-\u9fa5]/,
+      'hi': /[\u0900-\u097F]/,
+      'ja': /[\u3040-\u309F\u30A0-\u30FF]/,
+      'pt': /\b(obrigado|por favor|sim|não|olá|tchau|bom dia)\b/i,
+    };
+
+    const detected = new Set(['en']); // Default to English
+    
+    for (const [lang, pattern] of Object.entries(patterns)) {
+      if (pattern.test(text)) {
+        detected.add(lang);
+      }
+    }
+
+    return Array.from(detected);
+  };
+
+  // ==================== LOAD PREVIOUS RECORDINGS ====================
+  const loadPreviousRecordings = async () => {
+    try {
+      setLoadingRecordings(true);
+      const currentUser = auth.currentUser;
+      
+      if (!currentUser) {
+        console.log("⚠️ No user logged in");
+        setLoadingRecordings(false);
+        return;
+      }
+
+      console.log("📚 Loading recordings for user:", currentUser.uid);
+      
+      const recordingsRef = collection(db, "recordings");
+      const q = query(
+        recordingsRef,
+        where("userId", "==", currentUser.uid),
+        orderBy("createdAt", "desc"),
+        limit(10)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const recordings = [];
+      
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        recordings.push({
+          id: doc.id,
+          ...data,
+          formattedDate: formatRelativeDate(data.createdAt?.toDate()),
+        });
+      });
+      
+      console.log("✅ Loaded", recordings.length, "recordings");
+      setPreviousRecordings(recordings);
+    } catch (error) {
+      console.error("❌ Error loading recordings:", error);
+    } finally {
+      setLoadingRecordings(false);
+    }
+  };
+
+  const formatRelativeDate = (date) => {
+    if (!date) return "Unknown date";
+    
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    const diffHours = Math.floor(diffMs / 3600000);
+    const diffDays = Math.floor(diffMs / 86400000);
+    
+    if (diffMins < 1) return "Just now";
+    if (diffMins < 60) return `${diffMins} min ago`;
+    if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? 's' : ''} ago`;
+    if (diffDays === 1) return "Yesterday";
+    if (diffDays < 7) return `${diffDays} days ago`;
+    
+    return date.toLocaleDateString();
   };
 
   const requestPermissions = async () => {
@@ -213,7 +279,7 @@ export default function RecordScreen({ route }) {
   };
 
   // ==================== FIRESTORE SAVE ====================
-  const saveRecordingToFirestore = async (audioUri, transcriptionText, duration) => {
+  const saveRecordingToFirestore = async (audioUri, transcriptionText, duration, detectedLangs) => {
     try {
       console.log("💾 Saving to Firestore...");
       setIsSaving(true);
@@ -223,24 +289,18 @@ export default function RecordScreen({ route }) {
         throw new Error("User not authenticated. Please sign in first.");
       }
 
-      console.log("👤 Current user:", currentUser.uid);
-
-      // Step 1: Upload audio file to Firebase Storage
-      console.log("📤 Uploading audio to Firebase Storage...");
+      // Upload audio file
       let audioUrl = null;
-      
       if (audioUri) {
         try {
           const fileName = `recordings/${currentUser.uid}/${Date.now()}.m4a`;
           const storageRef = ref(storage, fileName);
           
-          // Get the blob from URI
           let blob;
           if (Platform.OS === "web") {
             const response = await fetch(audioUri);
             blob = await response.blob();
           } else {
-            // For mobile, read file as base64 and convert
             const base64 = await FileSystem.readAsStringAsync(audioUri, {
               encoding: FileSystem.EncodingType.Base64,
             });
@@ -253,18 +313,15 @@ export default function RecordScreen({ route }) {
             blob = new Blob([byteArray], { type: 'audio/m4a' });
           }
 
-          // Upload to Storage
           await uploadBytes(storageRef, blob);
           audioUrl = await getDownloadURL(storageRef);
           console.log("✅ Audio uploaded:", audioUrl);
         } catch (uploadError) {
-          console.error("⚠️ Audio upload failed (continuing anyway):", uploadError);
-          // Continue even if audio upload fails - we still have transcription
+          console.error("⚠️ Audio upload failed:", uploadError);
         }
       }
 
-      // Step 2: Save metadata to Firestore
-      console.log("📝 Saving metadata to Firestore...");
+      // Save to Firestore
       const recordingData = {
         userId: currentUser.uid,
         userEmail: currentUser.email || "unknown",
@@ -273,52 +330,70 @@ export default function RecordScreen({ route }) {
         duration: duration || 0,
         formattedDuration: formatDuration(duration || 0),
         transcriptionMethod: useWebSpeech ? "Web Speech API" : "AssemblyAI",
+        sourceLanguage: sourceLanguage,
+        targetLanguage: targetLanguage,
+        detectedLanguages: detectedLangs || [sourceLanguage],
         createdAt: serverTimestamp(),
         platform: Platform.OS,
-        title: `Recording ${new Date().toLocaleDateString()}`,
-        organizedNotes: null, // Will be populated by NotesScreen
+        title: `Recording ${new Date().toLocaleDateString()} ${new Date().toLocaleTimeString()}`,
+        organizedNotes: null,
+        continuedFrom: continuingRecordingId || null,
       };
 
-      console.log("📦 Data to save:", recordingData);
-
-      try {
-        const docRef = await addDoc(collection(db, "recordings"), recordingData);
+      let docRef;
+      if (continuingRecordingId) {
+        // Update existing recording
+        const recordingDocRef = doc(db, "recordings", continuingRecordingId);
+        await updateDoc(recordingDocRef, {
+          transcription: transcriptionText,
+          duration: duration,
+          formattedDuration: formatDuration(duration),
+          detectedLanguages: detectedLangs,
+          updatedAt: serverTimestamp(),
+        });
+        console.log("✅ Recording updated:", continuingRecordingId);
+        docRef = { id: continuingRecordingId };
+      } else {
+        // Create new recording
+        docRef = await addDoc(collection(db, "recordings"), recordingData);
         console.log("✅ Recording saved with ID:", docRef.id);
-
-        // Also save to AsyncStorage as backup for offline access
-        await AsyncStorage.setItem('latestTranscription', transcriptionText || "");
-        console.log("✅ Saved to AsyncStorage backup");
-
-        await haptics.notification('Success');
-        Alert.alert(
-          "Success! 🎉",
-          "Recording and transcription saved successfully!",
-          [
-            {
-              text: "View Notes",
-              onPress: () => {
-                if (navigation?.navigate) {
-                  navigation.navigate("NotesScreen", { refresh: Date.now() });
-                }
-              },
-            },
-            { text: "OK" }
-          ]
-        );
-
-        return docRef.id;
-      } catch (firestoreError) {
-        console.error("❌ Firestore write error:", firestoreError);
-        throw new Error(`Firestore error: ${firestoreError.message}\n\n💡 Check your Firestore security rules!`);
       }
+
+      await AsyncStorage.setItem('latestTranscription', transcriptionText || "");
+      
+      await haptics.notification('Success');
+      Alert.alert(
+        "Success! 🎉",
+        continuingRecordingId 
+          ? "Recording continued and saved successfully!"
+          : "Recording and transcription saved successfully!",
+        [
+          {
+            text: "View Notes",
+            onPress: () => {
+              if (navigation?.navigate) {
+                navigation.navigate("NotesScreen", { refresh: Date.now() });
+              }
+            },
+          },
+          { 
+            text: "OK",
+            onPress: () => {
+              setContinuingRecordingId(null);
+              loadPreviousRecordings();
+            }
+          }
+        ]
+      );
+
+      return docRef.id;
     } catch (error) {
       console.error("❌ Firestore save error:", error);
       Alert.alert(
         "Save Error",
-        `Failed to save recording: ${error.message}\n\nThe transcription is still available on this screen.`,
+        `Failed to save recording: ${error.message}`,
         [{ text: "OK" }]
       );
-      // Don't throw - allow user to continue using the app
     } finally {
       setIsSaving(false);
     }
@@ -337,12 +412,14 @@ export default function RecordScreen({ route }) {
     const SpeechRecognition = window.webkitSpeechRecognition;
     const recognition = new SpeechRecognition();
     
+    const langConfig = SUPPORTED_LANGUAGES.find(l => l.code === sourceLanguage);
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-US';
+    recognition.lang = langConfig?.speechCode || 'en-US';
     recognition.maxAlternatives = 1;
 
-    let finalTranscript = '';
+    let finalTranscript = continuingRecordingId && transcription ? transcription + ' ' : '';
+    const detectedLangs = new Set([sourceLanguage]);
 
     recognition.onstart = () => {
       console.log('✅ Web Speech started');
@@ -356,15 +433,20 @@ export default function RecordScreen({ route }) {
         
         if (event.results[i].isFinal) {
           finalTranscript += transcript + ' ';
+          
+          // Detect languages
+          const langs = detectLanguageFromText(transcript);
+          langs.forEach(lang => detectedLangs.add(lang));
+          
           console.log('📝 Final:', transcript);
         } else {
           interimTranscript += transcript;
         }
       }
 
-      // Update transcription in real-time
       const fullTranscript = finalTranscript + interimTranscript;
       setTranscription(fullTranscript);
+      setDetectedLanguages(Array.from(detectedLangs));
     };
 
     recognition.onerror = (event) => {
@@ -375,15 +457,12 @@ export default function RecordScreen({ route }) {
       } else if (event.error === 'not-allowed') {
         Alert.alert('Permission Denied', 'Please allow microphone access');
         stopRecording();
-      } else {
-        console.error('Error:', event.error);
       }
     };
 
     recognition.onend = () => {
       console.log('🏁 Web Speech ended');
       if (isRecording) {
-        // Restart if still recording
         recognition.start();
       }
     };
@@ -400,46 +479,30 @@ export default function RecordScreen({ route }) {
       webSpeechRef.current = null;
     }
   };
-// ==================== ASSEMBLYAI TRANSCRIPTION ====================
+
+  // ==================== ASSEMBLYAI TRANSCRIPTION ====================
   const transcribeWithAssemblyAI = async (uri) => {
     try {
       console.log("🎯 Starting AssemblyAI transcription...");
-      console.log("📱 Platform:", Platform.OS);
-      console.log("📁 Audio URI:", uri);
 
-      // Validate API key
       if (!ASSEMBLYAI_API_KEY || ASSEMBLYAI_API_KEY.length < 10) {
-        throw new Error("AssemblyAI API key not configured. Please add your API key at the top of RecordScreen.js or use Real-time Mode instead.");
+        throw new Error("AssemblyAI API key not configured.");
       }
 
-      // Step 1: Get audio blob (platform-specific)
-      console.log("📤 Reading audio file...");
       let blob;
-
       if (Platform.OS === "web") {
-        // Web: Fetch the blob directly
         const response = await fetch(uri);
         blob = await response.blob();
       } else {
-        // Mobile (iOS/Android): Read file as base64 and convert to blob
-        console.log("📱 Reading mobile file...");
-        
-        // Check if file exists
         const fileInfo = await FileSystem.getInfoAsync(uri);
-        console.log("📂 File info:", fileInfo);
-        
         if (!fileInfo.exists) {
           throw new Error("Recording file not found");
         }
 
-        // Read as base64
         const base64 = await FileSystem.readAsStringAsync(uri, {
           encoding: FileSystem.EncodingType.Base64,
         });
         
-        console.log("📦 Base64 length:", base64.length);
-
-        // Convert base64 to blob
         const byteCharacters = atob(base64);
         const byteNumbers = new Array(byteCharacters.length);
         for (let i = 0; i < byteCharacters.length; i++) {
@@ -451,12 +514,7 @@ export default function RecordScreen({ route }) {
 
       console.log("📦 Blob size:", blob.size, "bytes");
 
-      if (blob.size === 0) {
-        throw new Error("Audio file is empty - please record again");
-      }
-
-      // Step 2: Upload to AssemblyAI
-      console.log("☁️ Uploading to AssemblyAI...");
+      // Upload to AssemblyAI
       const uploadResponse = await fetch('https://api.assemblyai.com/v2/upload', {
         method: 'POST',
         headers: {
@@ -467,16 +525,13 @@ export default function RecordScreen({ route }) {
       });
 
       if (!uploadResponse.ok) {
-        const errorText = await uploadResponse.text();
-        console.error("❌ Upload error response:", errorText);
-        throw new Error(`Upload failed: ${uploadResponse.status} - ${errorText || 'Check your API key and internet connection'}`);
+        throw new Error(`Upload failed: ${uploadResponse.status}`);
       }
 
       const uploadData = await uploadResponse.json();
-      console.log("✅ File uploaded:", uploadData.upload_url);
+      console.log("✅ File uploaded");
 
-      // Step 3: Request transcription
-      console.log("📋 Requesting transcription...");
+      // Request transcription with language detection
       const transcriptResponse = await fetch('https://api.assemblyai.com/v2/transcript', {
         method: 'POST',
         headers: {
@@ -487,27 +542,24 @@ export default function RecordScreen({ route }) {
           audio_url: uploadData.upload_url,
           punctuate: true,
           format_text: true,
-          language_code: 'en_us',
+          language_detection: true, // Enable automatic language detection
         }),
       });
 
       if (!transcriptResponse.ok) {
-        const errorText = await transcriptResponse.text();
-        console.error("Transcription request error:", errorText);
         throw new Error(`Transcription request failed: ${transcriptResponse.status}`);
       }
 
       const transcriptData = await transcriptResponse.json();
       console.log("🆔 Transcript ID:", transcriptData.id);
 
-      // Step 4: Poll for result
-      console.log("⏳ Polling for result...");
+      // Poll for result
       let transcript = null;
       let attempts = 0;
-      const maxAttempts = 60; // 3 minutes max
+      const maxAttempts = 60;
 
       while (attempts < maxAttempts) {
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Wait 3 seconds
+        await new Promise(resolve => setTimeout(resolve, 3000));
         
         const pollResponse = await fetch(`https://api.assemblyai.com/v2/transcript/${transcriptData.id}`, {
           headers: { 'authorization': ASSEMBLYAI_API_KEY },
@@ -522,7 +574,17 @@ export default function RecordScreen({ route }) {
 
         if (transcript.status === 'completed') {
           console.log("✅ Transcription completed!");
-          return transcript.text;
+          console.log("🌍 Detected language:", transcript.language_code);
+          
+          // Detect languages in the text
+          const detectedLangs = detectLanguageFromText(transcript.text);
+          setDetectedLanguages(detectedLangs);
+          
+          return {
+            text: transcript.text,
+            detectedLanguage: transcript.language_code || sourceLanguage,
+            detectedLanguages: detectedLangs,
+          };
         } else if (transcript.status === 'error') {
           throw new Error(`Transcription error: ${transcript.error}`);
         }
@@ -530,7 +592,7 @@ export default function RecordScreen({ route }) {
         attempts++;
       }
 
-      throw new Error("Transcription timeout - please try again");
+      throw new Error("Transcription timeout");
     } catch (error) {
       console.error("❌ AssemblyAI error:", error);
       throw error;
@@ -546,7 +608,6 @@ export default function RecordScreen({ route }) {
       const hasPermission = await requestPermissions();
       if (!hasPermission) return;
 
-      // Start Web Speech if enabled
       if (useWebSpeech && Platform.OS === "web") {
         const webSpeechStarted = startWebSpeechRecognition();
         if (!webSpeechStarted) {
@@ -557,7 +618,6 @@ export default function RecordScreen({ route }) {
         }
       }
 
-      // Start audio recording
       await Audio.setAudioModeAsync({
         allowsRecordingIOS: true,
         playsInSilentModeIOS: true,
@@ -573,7 +633,7 @@ export default function RecordScreen({ route }) {
       recordingRef.current = recording;
       setIsRecording(true);
       setRecordingDuration(0);
-      if (!useWebSpeech) {
+      if (!useWebSpeech && !continuingRecordingId) {
         setTranscription("");
       }
       setRecordingUri(null);
@@ -586,19 +646,14 @@ export default function RecordScreen({ route }) {
 
   const pauseRecording = async () => {
     try {
-      console.log("⏸️ Pausing...");
       await haptics.impact('Light');
-      
       if (recordingRef.current) {
         await recordingRef.current.pauseAsync();
         setIsPaused(true);
       }
-      
       if (webSpeechRef.current) {
         webSpeechRef.current.stop();
       }
-      
-      console.log("✅ Paused");
     } catch (error) {
       console.error("❌ Pause failed:", error);
     }
@@ -606,19 +661,14 @@ export default function RecordScreen({ route }) {
 
   const resumeRecording = async () => {
     try {
-      console.log("▶️ Resuming...");
       await haptics.impact('Light');
-      
       if (recordingRef.current) {
         await recordingRef.current.startAsync();
         setIsPaused(false);
       }
-      
       if (useWebSpeech && Platform.OS === "web") {
         startWebSpeechRecognition();
       }
-      
-      console.log("✅ Resumed");
     } catch (error) {
       console.error("❌ Resume failed:", error);
     }
@@ -631,7 +681,6 @@ export default function RecordScreen({ route }) {
       setIsRecording(false);
       setIsPaused(false);
 
-      // Stop Web Speech
       stopWebSpeechRecognition();
 
       if (!recordingRef.current) {
@@ -650,15 +699,12 @@ export default function RecordScreen({ route }) {
       setRecordingUri(uri);
       const finalDuration = recordingDuration;
 
-      // If Web Speech was used, we already have transcription
       if (useWebSpeech && transcription) {
         console.log("✅ Using Web Speech transcription");
-        // Save to Firestore
-        await saveRecordingToFirestore(uri, transcription, finalDuration);
+        await saveRecordingToFirestore(uri, transcription, finalDuration, detectedLanguages);
         return;
       }
 
-      // Otherwise, transcribe with AssemblyAI
       console.log("✅ Recording stopped, starting transcription...");
       await transcribeAudio(uri, finalDuration);
     } catch (error) {
@@ -670,56 +716,32 @@ export default function RecordScreen({ route }) {
   const transcribeAudio = async (uri, duration) => {
     try {
       setIsTranscribing(true);
-      console.log("🎯 Choosing transcription method...");
+      console.log("🎯 Starting transcription...");
 
-      let transcribedText = "";
-      let method = transcriptionMethod;
+      let result = { text: "", detectedLanguages: [sourceLanguage] };
 
-      // Auto mode: Try AssemblyAI first, fallback to Web Speech
-      if (method === "auto") {
-        if (ASSEMBLYAI_API_KEY && ASSEMBLYAI_API_KEY.length > 10) {
-          method = "assemblyai";
-        } else if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-          method = "webspeech-fallback";
-        } else {
-          throw new Error("No transcription method available");
-        }
-      }
-
-      // Try AssemblyAI
-      if (method === "assemblyai") {
+      if (ASSEMBLYAI_API_KEY && ASSEMBLYAI_API_KEY.length > 10) {
         try {
-          console.log("🚀 Using AssemblyAI...");
-          transcribedText = await transcribeWithAssemblyAI(uri);
-          console.log("✅ AssemblyAI success!");
+          result = await transcribeWithAssemblyAI(uri);
         } catch (error) {
           console.error("❌ AssemblyAI failed:", error);
-          
-          // Fallback to Web Speech
-          if (typeof window !== 'undefined' && 'webkitSpeechRecognition' in window) {
-            console.log("🔄 Falling back to Web Speech...");
-            Alert.alert(
-              "Fallback Mode",
-              "AssemblyAI unavailable. Using Web Speech API.\nTip: Enable 'Real-time Mode' before recording for instant transcription."
-            );
-            transcribedText = "AssemblyAI unavailable. Please use real-time mode or check API key configuration.";
-          } else {
-            throw error;
-          }
+          throw error;
         }
+      } else {
+        throw new Error("No API key configured");
       }
 
-      setTranscription(transcribedText || "No speech detected");
+      const finalText = continuingRecordingId ? transcription + ' ' + result.text : result.text;
+      setTranscription(finalText || "No speech detected");
       
-      // Save to Firestore
-      if (transcribedText) {
-        await saveRecordingToFirestore(uri, transcribedText, duration);
+      if (result.text) {
+        await saveRecordingToFirestore(uri, finalText, duration, result.detectedLanguages);
       }
     } catch (error) {
       console.error("❌ Transcription error:", error);
       Alert.alert(
         "Transcription Error",
-        `${error.message}\n\nTip: Enable "Real-time Mode" for instant transcription without API keys!`
+        `${error.message}\n\nTip: Enable "Real-time Mode" for instant transcription!`
       );
     } finally {
       setIsTranscribing(false);
@@ -739,12 +761,14 @@ export default function RecordScreen({ route }) {
             text: "Discard",
             style: "destructive",
             onPress: async () => {
-              console.log("🗑️ Discarding...");
               setIsRecording(false);
               setIsPaused(false);
               setRecordingDuration(0);
-              setTranscription("");
+              if (!continuingRecordingId) {
+                setTranscription("");
+              }
               setRecordingUri(null);
+              setContinuingRecordingId(null);
               
               stopWebSpeechRecognition();
               
@@ -752,7 +776,6 @@ export default function RecordScreen({ route }) {
                 await recordingRef.current.stopAndUnloadAsync();
                 await Audio.setAudioModeAsync({ allowsRecordingIOS: false });
               }
-              console.log("✅ Discarded");
             },
           },
         ]
@@ -762,9 +785,72 @@ export default function RecordScreen({ route }) {
     }
   };
 
+  // ==================== CONTINUE RECORDING ====================
+  const continueRecording = async (recording) => {
+    try {
+      await haptics.impact('Medium');
+      
+      Alert.alert(
+        "Continue Recording",
+        `Continue recording: ${recording.title}?\n\nYour new recording will be added to the existing transcription.`,
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Continue",
+            onPress: () => {
+              setContinuingRecordingId(recording.id);
+              setTranscription(recording.transcription || "");
+              setSourceLanguage(recording.sourceLanguage || "en");
+              setTargetLanguage(recording.targetLanguage || "en");
+              setDetectedLanguages(recording.detectedLanguages || ["en"]);
+              
+              // Scroll to top to show recording UI
+              Alert.alert(
+                "Ready to Continue",
+                "Press 'Start Recording' to add to this lecture.",
+                [{ text: "OK" }]
+              );
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("❌ Continue recording failed:", error);
+    }
+  };
+
+  // ==================== DELETE RECORDING ====================
+  const deleteRecording = async (recordingId) => {
+    try {
+      Alert.alert(
+        "Delete Recording",
+        "Are you sure you want to delete this recording? This action cannot be undone.",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Delete",
+            style: "destructive",
+            onPress: async () => {
+              try {
+                setPreviousRecordings(prev => prev.filter(r => r.id !== recordingId));
+                await haptics.notification('Success');
+                Alert.alert("Deleted", "Recording deleted successfully");
+              } catch (error) {
+                console.error("❌ Delete failed:", error);
+                Alert.alert("Error", "Failed to delete recording");
+              }
+            },
+          },
+        ]
+      );
+    } catch (error) {
+      console.error("❌ Delete error:", error);
+    }
+  };
+
   const copyTranscription = async () => {
     await haptics.impact("Light");
-    Clipboard.setString(transcription);
+    await AsyncStorage.setItem('clipboard', transcription);
     Alert.alert("Copied!", "Transcription copied to clipboard.");
   };
 
@@ -780,6 +866,13 @@ export default function RecordScreen({ route }) {
     }
   };
 
+  const displayedRecordings = showAllRecordings ? previousRecordings : previousRecordings.slice(0, 3);
+
+  const getLanguageDisplay = (langCode) => {
+    const lang = SUPPORTED_LANGUAGES.find(l => l.code === langCode);
+    return lang ? `${lang.flag} ${lang.name}` : langCode;
+  };
+
   return (
     <View style={[styles.container, isDark && styles.containerDark]}>
       {/* Header */}
@@ -789,11 +882,10 @@ export default function RecordScreen({ route }) {
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
       >
-        <View style={styles.headerPattern} />
         <MaterialIcons name="mic" size={32} color="rgba(255,255,255,0.3)" />
         <Text style={styles.headerText}>Record Lecture</Text>
         <Text style={styles.headerSubtext}>
-          {useWebSpeech ? "Real-time transcription" : "Record & transcribe"}
+          {useWebSpeech ? "Real-time multi-language transcription" : "Record & transcribe with language detection"}
         </Text>
       </LinearGradient>
 
@@ -806,12 +898,72 @@ export default function RecordScreen({ route }) {
           style={[
             styles.recordContainer,
             isDark && { backgroundColor: "#1F2937" },
-            {
-              opacity: fadeAnim,
-              transform: [{ translateY: slideAnim }],
-            },
+            { opacity: fadeAnim },
           ]}
         >
+          {/* Continuing Banner */}
+          {continuingRecordingId && (
+            <View style={styles.continuingBanner}>
+              <MaterialIcons name="add-circle" size={20} color="#10B981" />
+              <Text style={styles.continuingText}>
+                Continuing previous recording
+              </Text>
+              <TouchableOpacity 
+                onPress={() => {
+                  setContinuingRecordingId(null);
+                  if (!isRecording) setTranscription("");
+                }}
+              >
+                <MaterialIcons name="close" size={20} color="#6B7280" />
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Language Selection */}
+          {!isRecording && (
+            <View style={styles.languageContainer}>
+              <View style={styles.languageSection}>
+                <View style={styles.languageHeader}>
+                  <MaterialIcons name="language" size={18} color="#9B5DE5" />
+                  <Text style={[styles.languageLabel, isDark && styles.textDark]}>
+                    Source Language
+                  </Text>
+                </View>
+                <View style={[styles.languagePicker, isDark && styles.languagePickerDark]}>
+                  <Text style={styles.languageValue}>
+                    {getLanguageDisplay(sourceLanguage)}
+                  </Text>
+                </View>
+              </View>
+
+              <MaterialIcons name="arrow-forward" size={20} color="#9CA3AF" />
+
+              <View style={styles.languageSection}>
+                <View style={styles.languageHeader}>
+                  <MaterialIcons name="translate" size={18} color="#10B981" />
+                  <Text style={[styles.languageLabel, isDark && styles.textDark]}>
+                    Convert To
+                  </Text>
+                </View>
+                <View style={[styles.languagePicker, isDark && styles.languagePickerDark]}>
+                  <Text style={styles.languageValue}>
+                    {getLanguageDisplay(targetLanguage)}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          )}
+
+          {/* Detected Languages Display */}
+          {detectedLanguages.length > 1 && (
+            <View style={styles.detectedLanguagesContainer}>
+              <MaterialIcons name="info-outline" size={16} color="#10B981" />
+              <Text style={[styles.detectedLanguagesText, isDark && styles.textSecondaryDark]}>
+                Multi-language detected: {detectedLanguages.map(l => getLanguageDisplay(l).split(' ')[0]).join(' ')}
+              </Text>
+            </View>
+          )}
+
           {/* Real-time Mode Toggle */}
           {Platform.OS === "web" && typeof window !== 'undefined' && 'webkitSpeechRecognition' in window && !isRecording && (
             <View style={[styles.modeToggle, isDark && styles.modeToggleDark]}>
@@ -827,8 +979,8 @@ export default function RecordScreen({ route }) {
                   </Text>
                   <Text style={[styles.modeDescription, isDark && styles.textSecondaryDark]}>
                     {useWebSpeech 
-                      ? "See text as you speak (Free, instant)"
-                      : "Transcribe after recording (Better accuracy)"}
+                      ? "Live transcription as you speak"
+                      : "Better accuracy with AssemblyAI"}
                   </Text>
                 </View>
               </View>
@@ -857,33 +1009,8 @@ export default function RecordScreen({ route }) {
             </View>
           )}
 
-          {/* Microphone Icon with Waves */}
+          {/* Microphone Icon */}
           <View style={styles.micContainer}>
-            {isRecording && !isPaused && (
-              <View style={styles.wavesContainer}>
-                {waveAnims.map((anim, index) => (
-                  <Animated.View
-                    key={index}
-                    style={[
-                      styles.wave,
-                      {
-                        transform: [{
-                          scale: anim.interpolate({
-                            inputRange: [0, 1],
-                            outputRange: [1, 1.5 + index * 0.2],
-                          }),
-                        }],
-                        opacity: anim.interpolate({
-                          inputRange: [0, 1],
-                          outputRange: [0.6, 0],
-                        }),
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
-            )}
-
             <Animated.View
               style={[
                 styles.recordIconContainer,
@@ -919,8 +1046,10 @@ export default function RecordScreen({ route }) {
               ? isPaused
                 ? "Recording Paused"
                 : useWebSpeech
-                ? "Recording (Live Transcription)"
+                ? "Recording (Live Multi-Language)"
                 : "Recording in Progress"
+              : continuingRecordingId
+              ? "Ready to Continue"
               : "Ready to Record"}
           </Text>
 
@@ -937,7 +1066,9 @@ export default function RecordScreen({ route }) {
                   style={styles.buttonGradient}
                 >
                   <MaterialIcons name="fiber-manual-record" size={24} color="#fff" />
-                  <Text style={styles.buttonText}>Start Recording</Text>
+                  <Text style={styles.buttonText}>
+                    {continuingRecordingId ? "Continue Recording" : "Start Recording"}
+                  </Text>
                 </LinearGradient>
               </TouchableOpacity>
             ) : (
@@ -983,14 +1114,14 @@ export default function RecordScreen({ route }) {
             )}
           </View>
 
-          {/* Recording Tips */}
+          {/* Tips */}
           {!isRecording && (
             <View style={[styles.tipsContainer, isDark && styles.tipsContainerDark]}>
               <MaterialIcons name="lightbulb-outline" size={18} color="#9B5DE5" />
               <Text style={[styles.tipsText, isDark && styles.textSecondaryDark]}>
                 {useWebSpeech 
-                  ? "Tip: Real-time mode works instantly without internet!"
-                  : "Tip: Post-recording mode provides better accuracy with internet access."}
+                  ? "Tip: Speak in multiple languages! System auto-detects and translates to your target language."
+                  : "Tip: AssemblyAI provides superior accuracy and automatic language detection."}
               </Text>
             </View>
           )}
@@ -1014,18 +1145,14 @@ export default function RecordScreen({ route }) {
 
             {isTranscribing ? (
               <View style={styles.loadingContainer}>
-                <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                  <MaterialIcons name="sync" size={32} color="#9B5DE5" />
-                </Animated.View>
+                <ActivityIndicator size="large" color="#9B5DE5" />
                 <Text style={[styles.loadingText, isDark && styles.textSecondaryDark]}>
-                  Processing with AssemblyAI... This may take a moment.
+                  Detecting languages and transcribing...
                 </Text>
               </View>
             ) : isSaving ? (
               <View style={styles.loadingContainer}>
-                <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                  <MaterialIcons name="cloud-upload" size={32} color="#10B981" />
-                </Animated.View>
+                <ActivityIndicator size="large" color="#10B981" />
                 <Text style={[styles.loadingText, isDark && styles.textSecondaryDark]}>
                   Saving to cloud storage...
                 </Text>
@@ -1038,7 +1165,6 @@ export default function RecordScreen({ route }) {
                   </Text>
                 </ScrollView>
 
-                {/* Action buttons */}
                 <View style={styles.transcriptionActions}>
                   <TouchableOpacity 
                     style={styles.actionButton}
@@ -1059,19 +1185,8 @@ export default function RecordScreen({ route }) {
                       Share
                     </Text>
                   </TouchableOpacity>
-                  
-                  <TouchableOpacity 
-                    style={styles.actionButton}
-                    onPress={() => navigation.navigate("History")}
-                  >
-                    <MaterialIcons name="history" size={20} color="#6B7280" />
-                    <Text style={[styles.actionButtonText, isDark && styles.textSecondaryDark]}>
-                      View All
-                    </Text>
-                  </TouchableOpacity>
                 </View>
 
-                {/* Method indicator */}
                 <View style={styles.methodBadge}>
                   <MaterialIcons 
                     name={useWebSpeech ? "flash-on" : "cloud"} 
@@ -1079,7 +1194,7 @@ export default function RecordScreen({ route }) {
                     color={useWebSpeech ? "#10B981" : "#9B5DE5"} 
                   />
                   <Text style={styles.methodText}>
-                    {useWebSpeech ? "Web Speech API" : "AssemblyAI"} • Saved to Cloud
+                    {useWebSpeech ? "Web Speech API" : "AssemblyAI"} • Multi-Language
                   </Text>
                 </View>
               </>
@@ -1087,31 +1202,150 @@ export default function RecordScreen({ route }) {
           </Animated.View>
         )}
 
-        {!transcription && !isTranscribing && !isRecording && (
+        {/* Previous Recordings */}
+        {previousRecordings.length > 0 && (
+          <View style={[styles.recordingsListContainer, isDark && styles.recordingsListContainerDark]}>
+            <View style={styles.recordingsHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                <MaterialIcons name="history" size={24} color="#9B5DE5" />
+                <Text style={[styles.recordingsTitle, isDark && styles.textDark]}>
+                  Previous Recordings
+                </Text>
+                <View style={styles.recordingsBadge}>
+                  <Text style={styles.recordingsBadgeText}>{previousRecordings.length}</Text>
+                </View>
+              </View>
+              {previousRecordings.length > 3 && (
+                <TouchableOpacity 
+                  onPress={() => setShowAllRecordings(!showAllRecordings)}
+                  style={styles.viewAllButton}
+                >
+                  <Text style={styles.viewAllText}>
+                    {showAllRecordings ? 'Show Less' : 'View All'}
+                  </Text>
+                  <MaterialIcons 
+                    name={showAllRecordings ? "expand-less" : "expand-more"} 
+                    size={20} 
+                    color="#9B5DE5" 
+                  />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {loadingRecordings ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#9B5DE5" />
+                <Text style={[styles.loadingText, isDark && styles.textSecondaryDark]}>
+                  Loading recordings...
+                </Text>
+              </View>
+            ) : (
+              <>
+                {displayedRecordings.map((recording) => (
+                  <View 
+                    key={recording.id}
+                    style={[styles.recordingCard, isDark && styles.recordingCardDark]}
+                  >
+                    <View style={styles.recordingIconContainer}>
+                      <MaterialIcons name="mic" size={20} color="#9B5DE5" />
+                    </View>
+                    
+                    <View style={styles.recordingContent}>
+                      <Text style={[styles.recordingTitle, isDark && styles.textDark]} numberOfLines={1}>
+                        {recording.title}
+                      </Text>
+                      
+                      <View style={styles.recordingMeta}>
+                        <Text style={[styles.recordingMetaText, isDark && styles.textSecondaryDark]}>
+                          <MaterialIcons name="schedule" size={12} /> {recording.formattedDuration || recording.duration}
+                        </Text>
+                        <Text style={[styles.recordingMetaText, isDark && styles.textSecondaryDark]}>
+                          {recording.formattedDate}
+                        </Text>
+                        {recording.detectedLanguages && recording.detectedLanguages.length > 1 && (
+                          <View style={styles.multiLangBadge}>
+                            <MaterialIcons name="translate" size={10} color="#10B981" />
+                            <Text style={styles.multiLangText}>Multi</Text>
+                          </View>
+                        )}
+                      </View>
+                      
+                      <Text style={[styles.recordingTranscript, isDark && styles.textSecondaryDark]} numberOfLines={2}>
+                        {recording.transcription || "No transcription available"}
+                      </Text>
+                      
+                      <View style={styles.recordingActions}>
+                        <TouchableOpacity
+                          onPress={() => continueRecording(recording)}
+                          style={styles.continueButton}
+                        >
+                          <MaterialIcons name="play-arrow" size={16} color="#FFFFFF" />
+                          <Text style={styles.continueButtonText}>Continue</Text>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity
+                          onPress={() => {
+                            Alert.alert(
+                              recording.title,
+                              recording.transcription,
+                              [{ text: "Close" }]
+                            );
+                          }}
+                          style={styles.viewButton}
+                        >
+                          <MaterialIcons name="visibility" size={16} color="#6B7280" />
+                          <Text style={styles.viewButtonText}>View</Text>
+                        </TouchableOpacity>
+                        
+                        <TouchableOpacity
+                          onPress={() => deleteRecording(recording.id)}
+                          style={styles.deleteButton}
+                        >
+                          <MaterialIcons name="delete-outline" size={16} color="#EF4444" />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </View>
+                ))}
+                
+                {!showAllRecordings && previousRecordings.length > 3 && (
+                  <TouchableOpacity
+                    onPress={() => setShowAllRecordings(true)}
+                    style={styles.showMoreButton}
+                  >
+                    <Text style={styles.showMoreText}>
+                      + {previousRecordings.length - 3} more recordings
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </View>
+        )}
+
+        {/* Empty State */}
+        {!transcription && !isTranscribing && !isRecording && previousRecordings.length === 0 && !loadingRecordings && (
           <View style={styles.placeholderContainer}>
             <MaterialIcons name="mic-none" size={64} color="#D1D5DB" />
             <Text style={[styles.placeholderText, isDark && styles.textSecondaryDark]}>
               No recordings yet
             </Text>
             <Text style={[styles.placeholderSubtext, isDark && styles.textSecondaryDark]}>
-              {useWebSpeech 
-                ? "Enable real-time mode to see text as you speak"
-                : "Start recording to capture and transcribe your lecture"}
+              Start recording to capture and transcribe lectures in multiple languages
             </Text>
             
-            {/* Setup Instructions */}
             <View style={[styles.setupCard, isDark && styles.setupCardDark]}>
               <Text style={[styles.setupTitle, isDark && styles.textDark]}>
-                  Setup Instructions
+                Multi-Language Features
               </Text>
               <View style={styles.setupStep}>
                 <Text style={styles.setupNumber}>1</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
-                    Offline  Mode (FREE)
+                    Automatic Detection
                   </Text>
                   <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
-                    Toggle switch above • Works instantly • No internet needed
+                    System detects all languages spoken during recording
                   </Text>
                 </View>
               </View>
@@ -1119,10 +1353,10 @@ export default function RecordScreen({ route }) {
                 <Text style={styles.setupNumber}>2</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
-                    Better Accuracy 
+                    Smart Translation
                   </Text>
                   <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
-                    Switch to online mode
+                    Converts all content to your selected target language
                   </Text>
                 </View>
               </View>
@@ -1130,10 +1364,10 @@ export default function RecordScreen({ route }) {
                 <Text style={styles.setupNumber}>3</Text>
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.setupStepTitle, isDark && styles.textDark]}>
-                    Auto-Save Enabled ✅
+                    Cloud Storage
                   </Text>
                   <Text style={[styles.setupStepText, isDark && styles.textSecondaryDark]}>
-                    All recordings automatically saved to your account
+                    All recordings automatically synced across devices
                   </Text>
                 </View>
               </View>
@@ -1160,17 +1394,6 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
     alignItems: "center",
-    position: "relative",
-    overflow: "hidden",
-  },
-  headerPattern: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    opacity: 0.1,
-    backgroundColor: "rgba(255,255,255,0.05)",
   },
   headerText: {
     fontSize: 28,
@@ -1179,9 +1402,11 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   headerSubtext: {
-    fontSize: 14,
+    fontSize: 13,
     color: "rgba(255,255,255,0.8)",
     marginTop: 4,
+    textAlign: "center",
+    paddingHorizontal: 20,
   },
   content: {
     flex: 1,
@@ -1192,13 +1417,79 @@ const styles = StyleSheet.create({
   recordContainer: {
     backgroundColor: "#FFFFFF",
     borderRadius: 24,
-    padding: 32,
+    padding: 24,
     shadowColor: "#000",
     shadowOpacity: 0.08,
     shadowRadius: 12,
     shadowOffset: { width: 0, height: 4 },
     elevation: 5,
     marginBottom: 24,
+  },
+  continuingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 16,
+    gap: 8,
+  },
+  continuingText: {
+    flex: 1,
+    fontSize: 13,
+    color: "#059669",
+    fontWeight: "600",
+  },
+  languageContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: 16,
+    gap: 8,
+  },
+  languageSection: {
+    flex: 1,
+  },
+  languageHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 6,
+  },
+  languageLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#6B7280",
+  },
+  languagePicker: {
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  languagePickerDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
+  },
+  languageValue: {
+    fontSize: 13,
+    color: "#1F2937",
+    fontWeight: "500",
+  },
+  detectedLanguagesContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    padding: 10,
+    borderRadius: 10,
+    marginBottom: 16,
+    gap: 6,
+  },
+  detectedLanguagesText: {
+    flex: 1,
+    fontSize: 11,
+    color: "#059669",
+    fontWeight: "500",
   },
   modeToggle: {
     backgroundColor: "#F9FAFB",
@@ -1257,22 +1548,6 @@ const styles = StyleSheet.create({
   micContainer: {
     alignItems: "center",
     marginVertical: 32,
-    position: "relative",
-  },
-  wavesContainer: {
-    position: "absolute",
-    width: 200,
-    height: 200,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  wave: {
-    position: "absolute",
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    borderWidth: 2,
-    borderColor: "#9B5DE5",
   },
   recordIconContainer: {
     width: 140,
@@ -1353,7 +1628,7 @@ const styles = StyleSheet.create({
   },
   tipsContainer: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "flex-start",
     backgroundColor: "#F3E8FF",
     padding: 12,
     borderRadius: 12,
@@ -1364,7 +1639,7 @@ const styles = StyleSheet.create({
   },
   tipsText: {
     flex: 1,
-    fontSize: 13,
+    fontSize: 12,
     color: "#6B21A8",
     lineHeight: 18,
   },
@@ -1441,6 +1716,161 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: "#9CA3AF",
     fontStyle: "italic",
+  },
+  recordingsListContainer: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 24,
+    padding: 20,
+    shadowColor: "#000",
+    shadowOpacity: 0.08,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 5,
+    marginBottom: 24,
+  },
+  recordingsListContainerDark: {
+    backgroundColor: "#1F2937",
+  },
+  recordingsHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 16,
+  },
+  recordingsTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#1F2937",
+  },
+  recordingsBadge: {
+    backgroundColor: "#F3E8FF",
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  recordingsBadgeText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#9B5DE5",
+  },
+  viewAllButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  viewAllText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#9B5DE5",
+  },
+  recordingCard: {
+    flexDirection: "row",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  recordingCardDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
+  },
+  recordingIconContainer: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "#F3E8FF",
+    justifyContent: "center",
+    alignItems: "center",
+    marginRight: 12,
+  },
+  recordingContent: {
+    flex: 1,
+  },
+  recordingTitle: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1F2937",
+    marginBottom: 4,
+  },
+  recordingMeta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 6,
+  },
+  recordingMetaText: {
+    fontSize: 11,
+    color: "#6B7280",
+  },
+  multiLangBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#ECFDF5",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+    gap: 2,
+  },
+  multiLangText: {
+    fontSize: 9,
+    color: "#10B981",
+    fontWeight: "600",
+  },
+  recordingTranscript: {
+    fontSize: 12,
+    color: "#6B7280",
+    lineHeight: 18,
+    marginBottom: 10,
+  },
+  recordingActions: {
+    flexDirection: "row",
+    gap: 8,
+  },
+  continueButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#9B5DE5",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  continueButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
+  viewButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#F3F4F6",
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    gap: 4,
+  },
+  viewButtonText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#6B7280",
+  },
+  deleteButton: {
+    backgroundColor: "#FEF2F2",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    marginLeft: "auto",
+  },
+  showMoreButton: {
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  showMoreText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "#9B5DE5",
   },
   placeholderContainer: {
     alignItems: "center",

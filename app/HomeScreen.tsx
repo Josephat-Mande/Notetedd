@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   View,
@@ -13,6 +12,8 @@ import {
   StatusBar,
   ActivityIndicator,
   Alert,
+  AppState,
+  Platform,
 } from "react-native";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { getAuth, onAuthStateChanged } from "firebase/auth";
@@ -23,17 +24,77 @@ import {
   where, 
   orderBy, 
   getDocs,
-  limit 
+  limit,
+  doc,
+  getDoc,
 } from "firebase/firestore";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import * as Notifications from "expo-notifications";
+import * as BackgroundFetch from "expo-background-fetch";
+import * as TaskManager from "expo-task-manager";
+import { Audio } from "expo-av";
 import Sidebar from "./Sidebar";
 
 // Import widgets
 import StudyAnalyticsWidget from "../components/widgets/StudyAnalyticsWidget";
 import PomodoroTimerWidget from "../components/widgets/PomodoroTimerWidget";
 import AchievementModal from "../components/widgets/AchievementModal";
+
+// Background task for Pomodoro timer
+const POMODORO_TASK_NAME = "POMODORO_BACKGROUND_TASK";
+
+// Configure notifications
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowAlert: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
+
+// Define background task
+TaskManager.defineTask(POMODORO_TASK_NAME, async () => {
+  try {
+    const pomodoroState = await AsyncStorage.getItem("pomodoroState");
+    if (!pomodoroState) {
+      return BackgroundFetch.BackgroundFetchResult.NoData;
+    }
+
+    const state = JSON.parse(pomodoroState);
+    const now = Date.now();
+    
+    if (state.isActive && state.endTime && now >= state.endTime) {
+      // Time's up! Send notification
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: state.type === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
+          body: state.type === "work" 
+            ? "Great job! Time for a break." 
+            : "Break's over. Ready to focus?",
+          sound: true,
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+        },
+        trigger: null, // Show immediately
+      });
+
+      // Update state
+      await AsyncStorage.setItem("pomodoroState", JSON.stringify({
+        ...state,
+        isActive: false,
+        timeLeft: 0,
+      }));
+
+      return BackgroundFetch.BackgroundFetchResult.NewData;
+    }
+
+    return BackgroundFetch.BackgroundFetchResult.NoData;
+  } catch (error) {
+    console.error("Background task error:", error);
+    return BackgroundFetch.BackgroundFetchResult.Failed;
+  }
+});
 
 export default function HomeScreen() {
   const navigation = useNavigation();
@@ -58,11 +119,120 @@ export default function HomeScreen() {
   const [showAchievement, setShowAchievement] = useState(false);
   const [currentAchievement, setCurrentAchievement] = useState(null);
   
+  // Pomodoro background state
+  const [pomodoroRunningInBackground, setPomodoroRunningInBackground] = useState(false);
+  const appState = useRef(AppState.currentState);
+  const soundObject = useRef(null);
+  
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(50)).current;
   const scaleAnim = useRef(new Animated.Value(0.9)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
+
+  // Initialize notifications and background tasks
+  useEffect(() => {
+    setupNotifications();
+    setupBackgroundFetch();
+    checkPomodoroState();
+
+    // Monitor app state changes
+    const subscription = AppState.addEventListener("change", handleAppStateChange);
+
+    return () => {
+      subscription.remove();
+      if (soundObject.current) {
+        soundObject.current.unloadAsync();
+      }
+    };
+  }, []);
+
+  const setupNotifications = async () => {
+    try {
+      const { status: existingStatus } = await Notifications.getPermissionsAsync();
+      let finalStatus = existingStatus;
+      
+      if (existingStatus !== "granted") {
+        const { status } = await Notifications.requestPermissionsAsync();
+        finalStatus = status;
+      }
+      
+      if (finalStatus !== "granted") {
+        console.warn("Notification permissions not granted");
+        return;
+      }
+
+      console.log("✅ Notifications enabled");
+
+      // Listen for notification responses
+      Notifications.addNotificationResponseReceivedListener(response => {
+        console.log("Notification tapped:", response);
+        // Navigate to home or pomodoro timer when notification is tapped
+        navigation.navigate("Home");
+      });
+    } catch (error) {
+      console.error("Notification setup error:", error);
+    }
+  };
+
+  const setupBackgroundFetch = async () => {
+    try {
+      const isRegistered = await TaskManager.isTaskRegisteredAsync(POMODORO_TASK_NAME);
+      
+      if (!isRegistered) {
+        await BackgroundFetch.registerTaskAsync(POMODORO_TASK_NAME, {
+          minimumInterval: 60, // Check every 1 minute
+          stopOnTerminate: false,
+          startOnBoot: true,
+        });
+        console.log("✅ Background fetch registered");
+      }
+    } catch (error) {
+      console.error("Background fetch setup error:", error);
+    }
+  };
+
+  const checkPomodoroState = async () => {
+    try {
+      const pomodoroState = await AsyncStorage.getItem("pomodoroState");
+      if (pomodoroState) {
+        const state = JSON.parse(pomodoroState);
+        setPomodoroRunningInBackground(state.isActive || false);
+      }
+    } catch (error) {
+      console.error("Error checking pomodoro state:", error);
+    }
+  };
+
+  const handleAppStateChange = (nextAppState) => {
+    if (appState.current.match(/inactive|background/) && nextAppState === "active") {
+      // App has come to foreground
+      console.log("App came to foreground");
+      checkPomodoroState();
+      
+      // Refresh data when returning to app
+      if (auth.currentUser) {
+        loadAllData().catch(err => {
+          console.error("❌ Failed to refresh data:", err);
+        });
+      }
+    }
+    
+    appState.current = nextAppState;
+  };
+
+  const playNotificationSound = async () => {
+    try {
+      const { sound } = await Audio.Sound.createAsync(
+        require("../assets/notification.mp3"), // Make sure to add a notification sound
+        { shouldPlay: true }
+      );
+      soundObject.current = sound;
+      await sound.playAsync();
+    } catch (error) {
+      console.error("Error playing sound:", error);
+    }
+  };
 
   // Initialize animations
   useEffect(() => {
@@ -128,6 +298,7 @@ export default function HomeScreen() {
         loadAllData().catch(err => {
           console.error("❌ Failed to refresh dashboard data:", err);
         });
+        checkPomodoroState(); // Check pomodoro state when returning to screen
       }
     }, [])
   );
@@ -495,26 +666,85 @@ export default function HomeScreen() {
     }
   };
 
-  const handleLecturePress = (lecture) => {
-    navigation.navigate("NotesScreen", { 
-      theme,
-      lectureId: lecture.id 
-    });
+  // ==================== FETCH SPECIFIC LECTURE AND NAVIGATE ====================
+  const handleLecturePress = async (lecture) => {
+    try {
+      console.log("📖 Fetching lecture:", lecture.id);
+      
+      // Show loading indicator
+      setLoading(true);
+
+      const currentUser = auth.currentUser;
+      if (!currentUser) {
+        Alert.alert("Error", "Please sign in to view lecture notes");
+        setLoading(false);
+        return;
+      }
+
+      // Fetch the specific lecture document from Firebase
+      const lectureRef = doc(db, "recordings", lecture.id);
+      const lectureDoc = await getDoc(lectureRef);
+
+      if (!lectureDoc.exists()) {
+        Alert.alert("Error", "Lecture not found");
+        setLoading(false);
+        return;
+      }
+
+      const lectureData = lectureDoc.data();
+
+      // Verify this lecture belongs to the current user
+      if (lectureData.userId !== currentUser.uid) {
+        Alert.alert("Error", "You don't have permission to view this lecture");
+        setLoading(false);
+        return;
+      }
+
+      console.log("✅ Lecture fetched successfully");
+
+      // Save to AsyncStorage for NotesScreen to access
+      await AsyncStorage.setItem('selectedLecture', JSON.stringify({
+        id: lecture.id,
+        ...lectureData,
+      }));
+
+      setLoading(false);
+
+      // Navigate to NotesScreen with the lecture data
+      navigation.navigate("NotesScreen", { 
+        theme,
+        lectureId: lecture.id,
+        lectureData: lectureData,
+        refresh: Date.now(),
+      });
+
+    } catch (error) {
+      console.error("❌ Error fetching lecture:", error);
+      setLoading(false);
+      Alert.alert(
+        "Error", 
+        "Failed to load lecture notes. Please try again."
+      );
+    }
   };
 
   const handleStartRecording = () => {
     navigation.navigate("RecordScreen");
   };
 
-  // ==================== EVENT HANDLERS ====================
-  const handlePomodoroComplete = (sessionType) => {
+  // ==================== POMODORO EVENT HANDLERS ====================
+  const handlePomodoroComplete = async (sessionType) => {
     console.log(`${sessionType} session completed!`);
     
+    // Play notification sound
+    await playNotificationSound();
+    
+    // Show achievement
     const achievement = {
       id: 'pomodoro_complete',
       icon: 'timer',
       title: 'Focused Mind',
-      description: 'Completed a Pomodoro session!',
+      description: `Completed a ${sessionType} session!`,
       color: '#9B5DE5',
       points: 25,
     };
@@ -522,8 +752,68 @@ export default function HomeScreen() {
     setCurrentAchievement(achievement);
     setShowAchievement(true);
     
+    // Send notification
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: sessionType === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
+        body: sessionType === "work" 
+          ? "Great job! Time for a well-deserved break." 
+          : "Break's over. Ready to focus again?",
+        sound: true,
+      },
+      trigger: null,
+    });
+    
     // Refresh stats
     loadStats();
+    
+    // Update background state
+    setPomodoroRunningInBackground(false);
+    await AsyncStorage.setItem("pomodoroState", JSON.stringify({
+      isActive: false,
+      timeLeft: 0,
+    }));
+  };
+
+  const handlePomodoroStart = async (duration, type) => {
+    console.log(`Starting ${type} session: ${duration} minutes`);
+    
+    const endTime = Date.now() + (duration * 60 * 1000);
+    
+    // Save state for background tracking
+    await AsyncStorage.setItem("pomodoroState", JSON.stringify({
+      isActive: true,
+      type: type,
+      duration: duration,
+      endTime: endTime,
+      timeLeft: duration * 60,
+    }));
+    
+    setPomodoroRunningInBackground(true);
+    
+    // Schedule notification for when timer completes
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title: type === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
+        body: type === "work" 
+          ? "Great job! Time for a break." 
+          : "Break's over. Ready to focus?",
+        sound: true,
+      },
+      trigger: {
+        seconds: duration * 60,
+      },
+    });
+  };
+
+  const handlePomodoroPause = async () => {
+    await AsyncStorage.setItem("pomodoroState", JSON.stringify({
+      isActive: false,
+    }));
+    setPomodoroRunningInBackground(false);
+    
+    // Cancel scheduled notifications
+    await Notifications.cancelAllScheduledNotificationsAsync();
   };
 
   const toggleTheme = () => {
@@ -592,6 +882,14 @@ export default function HomeScreen() {
         backgroundColor="transparent"
         translucent
       />
+      
+      {/* Pomodoro Running Indicator */}
+      {pomodoroRunningInBackground && (
+        <View style={styles.pomodoroIndicator}>
+          <MaterialIcons name="timer" size={16} color="#FFF" />
+          <Text style={styles.pomodoroIndicatorText}>Pomodoro running...</Text>
+        </View>
+      )}
       
       <ScrollView 
         showsVerticalScrollIndicator={false}
@@ -732,6 +1030,8 @@ export default function HomeScreen() {
         <PomodoroTimerWidget 
           theme={theme}
           onSessionComplete={handlePomodoroComplete}
+          onStart={handlePomodoroStart}
+          onPause={handlePomodoroPause}
         />
 
         {/* Study Analytics Widget */}
@@ -938,6 +1238,32 @@ const styles = StyleSheet.create({
   lightBg: { backgroundColor: "#F5F7FA" },
   darkBg: { backgroundColor: "#0F172A" },
   scrollContent: { paddingBottom: 20 },
+  
+  // Pomodoro Running Indicator
+  pomodoroIndicator: {
+    position: "absolute",
+    top: 50,
+    left: "50%",
+    marginLeft: -80,
+    backgroundColor: "#9B5DE5",
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    zIndex: 1000,
+    gap: 8,
+  },
+  pomodoroIndicatorText: {
+    color: "#FFF",
+    fontSize: 13,
+    fontWeight: "600",
+  },
   
   // Loading State
   loadingContainer: {
