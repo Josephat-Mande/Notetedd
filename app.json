@@ -21,7 +21,7 @@
     },
     "android": {
       "adaptiveIcon": {
-        "foregroundImage": "./public/icon.png",
+        "foregroundImage": "./public/icon-512.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.notetedd.app"

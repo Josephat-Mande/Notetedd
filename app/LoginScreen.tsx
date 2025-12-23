@@ -4,6 +4,7 @@ import { useRouter } from "expo-router";
 import { 
   View, 
   Text, 
+  Image,
   TextInput, 
   TouchableOpacity, 
   StyleSheet,
@@ -20,9 +21,15 @@ import {
   signInWithEmailAndPassword,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithCredential,
 } from "firebase/auth";
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import Toast, { showToast } from "../toastConfig";
+import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
+
+// Required for expo-auth-session
+WebBrowser.maybeCompleteAuthSession();
 
 const { width, height } = Dimensions.get("window");
 
@@ -33,6 +40,14 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [focusedInput, setFocusedInput] = useState(null);
   const router = useRouter();
+
+  // Google Sign-In configuration
+  // Replace these with your actual client IDs from Google Cloud Console
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    androidClientId: 'YOUR_ANDROID_CLIENT_ID.apps.googleusercontent.com',
+    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+    webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+  });
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -139,6 +154,15 @@ export default function LoginScreen() {
     ).start();
   }, []);
 
+  // Handle Google Sign-In response (for mobile)
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const { id_token } = response.params;
+      const credential = GoogleAuthProvider.credential(id_token);
+      handleGoogleCredential(credential);
+    }
+  }, [response]);
+
   const spin = rotateAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
@@ -201,6 +225,8 @@ export default function LoginScreen() {
         errorMessage = "Incorrect password.";
       } else if (error.code === "auth/invalid-email") {
         errorMessage = "Invalid email address.";
+      } else if (error.code === "auth/invalid-credential") {
+        errorMessage = "Invalid email or password.";
       }
       
       showToast("error", "Login Failed", errorMessage);
@@ -210,11 +236,11 @@ export default function LoginScreen() {
     }
   };
 
-  const handleGoogleSignIn = async () => {
+  // Handle Google credential (common function for web and mobile)
+  const handleGoogleCredential = async (credential) => {
     try {
       setLoading(true);
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
+      const result = await signInWithCredential(auth, credential);
       const user = result.user;
 
       // Get or create user document
@@ -251,6 +277,59 @@ export default function LoginScreen() {
       showToast("error", "Error", "Google sign-in failed. Please try again.");
       shakeAnimation();
     } finally {
+      setLoading(false);
+    }
+  };
+
+  // Handle Google Sign-In button press
+  const handleGoogleSignIn = async () => {
+    try {
+      setLoading(true);
+
+      if (Platform.OS === 'web') {
+        // Web implementation
+        const provider = new GoogleAuthProvider();
+        const result = await signInWithPopup(auth, provider);
+        const user = result.user;
+
+        // Get or create user document
+        const userDoc = await getDoc(doc(db, "users", user.uid));
+        
+        if (!userDoc.exists()) {
+          await setDoc(doc(db, "users", user.uid), {
+            fullName: user.displayName || "Google User",
+            email: user.email,
+            createdAt: new Date().toISOString(),
+            authProvider: "google",
+            photoURL: user.photoURL,
+          });
+        }
+
+        const fullName = userDoc.exists() 
+          ? userDoc.data().fullName 
+          : user.displayName || "User";
+
+        showToast("success", "Welcome Back!", `Hello, ${fullName}! 🎉`);
+
+        Animated.parallel([
+          Animated.timing(fadeAnim, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          router.push({ pathname: "/HomeScreen", params: { username: fullName } });
+        });
+
+      } else {
+        // Mobile implementation (iOS/Android)
+        await promptAsync();
+      }
+
+    } catch (error) {
+      console.error("Google Sign In Error:", error);
+      showToast("error", "Error", "Google sign-in failed. Please try again.");
+      shakeAnimation();
       setLoading(false);
     }
   };
@@ -331,7 +410,10 @@ export default function LoginScreen() {
           <ScrollView
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            bounces={false}
+            overScrollMode="never"
           >
             {/* Logo/Brand Section */}
             <Animated.View 
@@ -350,14 +432,14 @@ export default function LoginScreen() {
                 ]}
               >
                 <LinearGradient
-                  colors={["#ffffff", "#ffffff"]}
+                  colors={["#ffffff", "#f8f9fa"]}
                   style={styles.logoGradient}
                 >
-                  <Icon name="note" size={32} color="#9B5DE5" />
+                  <Image source={require('../public/icon.jpg')} style={{ width: 32, height: 32, tintColor: "#9B5DE5" }} />
                 </LinearGradient>
               </Animated.View>
               <Text style={styles.brandName}>NoteTedd</Text>
-              <Text style={styles.brandTagline}></Text>
+              <Text style={styles.brandTagline}>Smart Learning Platform</Text>
             </Animated.View>
 
             {/* Form Container */}
@@ -378,7 +460,7 @@ export default function LoginScreen() {
                 style={styles.formGradient}
               >
                 <Text style={styles.title}>Welcome Back</Text>
-                <Text style={styles.subtitle}>Sign in to continue your smart learning journey </Text>
+                <Text style={styles.subtitle}>Sign in to continue your smart learning journey</Text>
 
                 {/* Email Input */}
                 <View style={styles.inputWrapper}>
@@ -474,38 +556,39 @@ export default function LoginScreen() {
                       </View>
                     ) : (
                       <>
-                        <Icon name="login" size={22} color="#fff" />
+                        
                         <Text style={styles.buttonText}>Login</Text>
-                        <Icon name="arrow-forward" size={20} color="#fff" />
+                        <Icon name="login" size={20} color="#fff" />
                       </>
                     )}
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* Divider
+                {/* Divider */}
                 <View style={styles.dividerContainer}>
                   <View style={styles.dividerLine} />
                   <Text style={styles.dividerText}>or continue with</Text>
                   <View style={styles.dividerLine} />
-                </View> */}
+                </View>
 
-                {/* Google Sign In Button
+                {/* Google Sign In Button */}
                 <TouchableOpacity 
                   onPress={handleGoogleSignIn}
                   style={styles.googleButton}
-                  disabled={loading}
+                  disabled={loading || !request}
                   activeOpacity={0.8}
                 >
                   <LinearGradient
                     colors={["#ffffff", "#f8f9fa"]}
                     style={styles.googleGradient}
                   >
-                    <Icon name="login" size={24} color="#4285F4" />
+                    <Image
+                                                      source={{ uri: 'https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png' }}
+                                                      style={styles.googleIcon}
+                                                    />
                     <Text style={styles.googleButtonText}>Sign in with Google</Text>
                   </LinearGradient>
-                </TouchableOpacity> */}
-
-                
+                </TouchableOpacity>
 
                 {/* Footer */}
                 <View style={styles.footer}>
@@ -541,19 +624,25 @@ export default function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: Platform.OS === 'web' ? 1200 : '100%',
   },
   gradientBackground: {
     flex: 1,
     position: "relative",
+    width: '100%',
   },
   keyboardView: {
     flex: 1,
+    width: '100%',
   },
   scrollContent: {
     flexGrow: 1,
-    paddingTop: 60,
+    paddingTop: Platform.OS === 'android' ? 50 : 60,
     paddingHorizontal: 24,
     justifyContent: "center",
+    width: '100%',
   },
 
   // Floating Background Elements
@@ -590,7 +679,7 @@ const styles = StyleSheet.create({
     position: "absolute",
   },
   decorIcon1: {
-    top: 110,
+    top: Platform.OS === 'android' ? 90 : 110,
     left: 35,
   },
   decorIcon2: {
@@ -657,6 +746,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 12 },
     shadowOpacity: 0.35,
     shadowRadius: 25,
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 500 : '100%',
+    alignSelf: 'center',
   },
   formGradient: {
     padding: 32,
@@ -813,27 +905,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 
-  // Benefits Section
-  benefitsContainer: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    marginBottom: 24,
-    paddingVertical: 16,
-    backgroundColor: "rgba(155, 93, 229, 0.05)",
-    borderRadius: 16,
-  },
-  benefitItem: {
-    alignItems: "center",
-    gap: 6,
-  },
-  benefitText: {
-    fontSize: 12,
-    color: "#4B5563",
-    fontWeight: "700",
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-
   // Footer
   footer: {
     flexDirection: "row",
@@ -852,6 +923,11 @@ const styles = StyleSheet.create({
     color: "#e67e22",
     fontSize: 15,
     fontWeight: "bold",
+  },
+  googleIcon: {
+    width: 24,
+    height: 24,
+    marginRight: 12,
   },
 
   // Trust Badge

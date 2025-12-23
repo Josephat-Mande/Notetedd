@@ -22,9 +22,15 @@ import {
   updateProfile,
   GoogleAuthProvider,
   signInWithPopup,
+  signInWithCredential,
 } from "firebase/auth";
 import { doc, setDoc } from "firebase/firestore";
 import Toast, { showToast } from "../toastConfig";
+import * as Google from 'expo-auth-session/providers/google';
+import * as WebBrowser from 'expo-web-browser';
+
+// Required for expo-auth-session to work properly
+WebBrowser.maybeCompleteAuthSession();
 
 const { width, height } = Dimensions.get("window");
 
@@ -38,6 +44,14 @@ export default function AuthScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [focusedInput, setFocusedInput] = useState(null);
   const router = useRouter();
+
+  // Google Sign-In configuration
+  // Replace these with your actual client IDs from Google Cloud Console
+  const [request, response, promptAsync] = Google.useAuthRequest({
+    androidClientId: '378006316872-agteaq0ft356k5ub7lajbk22mqg4s8m2.apps.googleusercontent.com',
+    iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+    webClientId: '378006316872-gn2he51al2pbfbtm20ukr2550imnso3a.apps.googleusercontent.com',
+  });
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -143,6 +157,15 @@ export default function AuthScreen() {
     ).start();
   }, []);
 
+  // Handle Google Sign-In response (for mobile)
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const { id_token } = response.params;
+      const credential = GoogleAuthProvider.credential(id_token);
+      handleGoogleCredential(credential);
+    }
+  }, [response]);
+
   const spin = rotateAnim.interpolate({
     inputRange: [0, 1],
     outputRange: ['0deg', '360deg'],
@@ -191,7 +214,6 @@ export default function AuthScreen() {
   const handleSignUp = async () => {
     if (!validateInputs()) return;
 
-    // Guard: ensure auth and db are initialized
     if (!auth || !db) {
       showToast("error", "Error", "Authentication service not ready. Please try again.");
       return;
@@ -203,7 +225,6 @@ export default function AuthScreen() {
       const userCredential = await createUserWithEmailAndPassword(auth, email, password);
       const user = userCredential.user;
 
-      // Guard: ensure user was created
       if (!user) {
         throw new Error("Sign up succeeded but user object is null");
       }
@@ -251,20 +272,14 @@ export default function AuthScreen() {
     }
   };
 
-  const handleGoogleSignUp = async () => {
+  // Handle Google credential (common function for web and mobile)
+  const handleGoogleCredential = async (credential) => {
     try {
-      // signInWithPopup is web-only — avoid calling on native
-      if (Platform.OS !== 'web') {
-        showToast('error', 'Unsupported', 'Google web sign-up is not available on mobile. Use email sign-up or native Google sign-in.');
-        return;
-      }
-
       setIsLoading(true);
-      const provider = new GoogleAuthProvider();
-      const result = await signInWithPopup(auth, provider);
+      const result = await signInWithCredential(auth, credential);
       const user = result.user;
 
-      // Check if user document exists, if not create it
+      // Create or update user document
       await setDoc(doc(db, "users", user.uid), {
         fullName: user.displayName || "Google User",
         email: user.email,
@@ -289,6 +304,49 @@ export default function AuthScreen() {
       console.error("Google Sign Up Error:", error);
       showToast("error", "Error", "Google sign-up failed. Please try again.");
     } finally {
+      setIsLoading(false);
+    }
+  };
+
+  // Handle Google Sign-In button press
+  const handleGoogleSignUp = async () => {
+    try {
+      setIsLoading(true);
+
+      if (Platform.OS === 'web') {
+        // Web implementation
+        const provider = new GoogleAuthProvider();
+        const result = await signInWithPopup(auth, provider);
+        const user = result.user;
+
+        await setDoc(doc(db, "users", user.uid), {
+          fullName: user.displayName || "Google User",
+          email: user.email,
+          createdAt: new Date().toISOString(),
+          authProvider: "google",
+          photoURL: user.photoURL,
+        }, { merge: true });
+
+        showToast("success", "Success", "Signed up with Google successfully!");
+        
+        Animated.parallel([
+          Animated.timing(fadeAnim, {
+            toValue: 0,
+            duration: 300,
+            useNativeDriver: true,
+          }),
+        ]).start(() => {
+          router.push("/HomeScreen");
+        });
+
+      } else {
+        // Mobile implementation (iOS/Android)
+        await promptAsync();
+      }
+
+    } catch (error) {
+      console.error("Google Sign Up Error:", error);
+      showToast("error", "Error", "Google sign-up failed. Please try again.");
       setIsLoading(false);
     }
   };
@@ -388,7 +446,10 @@ export default function AuthScreen() {
           <ScrollView
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
+            showsHorizontalScrollIndicator={false}
             keyboardShouldPersistTaps="handled"
+            bounces={false}
+            overScrollMode="never"
           >
             {/* Logo/Brand Section */}
             <Animated.View 
@@ -410,7 +471,7 @@ export default function AuthScreen() {
                   colors={["#ffffff", "#f8f9fa"]}
                   style={styles.logoGradient}
                 >
-                  <Image source={require('../public/icon.jpg')} style={{ width: 32, height: 32, tintColor: "#e67e22" }} />
+                  <Image source={require('./../assets/images/icon.png')} style={{ width: 32, height: 32, tintColor: "#e67e22" }} />
                 </LinearGradient>
               </Animated.View>
               <Text style={styles.brandName}>NoteTedd</Text>
@@ -432,7 +493,7 @@ export default function AuthScreen() {
                 style={styles.formGradient}
               >
                 <Text style={styles.title}>Create Account</Text>
-                <Text style={styles.subtitle}>Join thousands of students learning smarter </Text>
+                <Text style={styles.subtitle}>Join thousands of students learning smarter</Text>
 
                 {/* Full Name Input */}
                 <View style={styles.inputWrapper}>
@@ -605,7 +666,6 @@ export default function AuthScreen() {
                       </View>
                     ) : (
                       <>
-                        {/* <Icon name="rocket-launch" size={20} color="#fff" /> */}
                         <Text style={styles.buttonText}>Sign Up</Text>
                         <Icon name="arrow-forward" size={20} color="#fff" />
                       </>
@@ -613,39 +673,26 @@ export default function AuthScreen() {
                   </LinearGradient>
                 </TouchableOpacity>
 
-                {/* Divider
+                {/* Divider */}
                 <View style={styles.dividerContainer}>
                   <View style={styles.dividerLine} />
                   <Text style={styles.dividerText}>or continue with</Text>
                   <View style={styles.dividerLine} />
-                </View> */}
+                </View>
 
                 {/* Google Sign Up Button */}
-                {/* <TouchableOpacity 
+                <TouchableOpacity 
                   onPress={handleGoogleSignUp}
                   style={styles.googleButton}
-                  disabled={isLoading}
+                  disabled={isLoading || !request}
                   activeOpacity={0.8}
                 >
-                  <Icon name="login" size={22} color="#4285F4" />
+                  <Image
+                                  source={{ uri: 'https://www.google.com/images/branding/googleg/1x/googleg_standard_color_128dp.png' }}
+                                  style={styles.googleIcon}
+                                />
                   <Text style={styles.googleButtonText}>Sign up with Google</Text>
-                </TouchableOpacity> */}
-
-                {/* Features List */}
-                {/* <View style={styles.featuresContainer}>
-                  <View style={styles.featureItem}>
-                    <Icon name="check-circle" size={18} color="#10B981" />
-                    <Text style={styles.featureText}>AI-Powered Notes</Text>
-                  </View>
-                  <View style={styles.featureItem}>
-                    <Icon name="check-circle" size={18} color="#10B981" />
-                    <Text style={styles.featureText}>Smart Quizzes</Text>
-                  </View>
-                  <View style={styles.featureItem}>
-                    <Icon name="check-circle" size={18} color="#10B981" />
-                    <Text style={styles.featureText}>Study Analytics</Text>
-                  </View>
-                </View> */}
+                </TouchableOpacity>
 
                 {/* Footer */}
                 <View style={styles.footer}>
@@ -670,18 +717,29 @@ export default function AuthScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+    width: '100%',
+    alignSelf: 'center',
+    maxWidth: Platform.OS === 'web' ? 1200 : '100%',
   },
   gradientBackground: {
     flex: 1,
     position: "relative",
+    width: '100%',
   },
   keyboardView: {
     flex: 1,
+    width: '100%',
   },
   scrollContent: {
     flexGrow: 1,
-    paddingTop: 50,
+    paddingTop: Platform.OS === 'android' ? 40 : 50,
     paddingHorizontal: 24,
+    width: '100%',
+  },
+  googleIcon: {
+    width: 24,
+    height: 24,
+    marginRight: 12,
   },
 
   // Floating Background Elements
@@ -718,7 +776,7 @@ const styles = StyleSheet.create({
     position: "absolute",
   },
   decorIcon1: {
-    top: 100,
+    top: Platform.OS === 'android' ? 80 : 100,
     left: 40,
   },
   decorIcon2: {
@@ -785,6 +843,9 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 10 },
     shadowOpacity: 0.3,
     shadowRadius: 20,
+    width: '100%',
+    maxWidth: Platform.OS === 'web' ? 500 : '100%',
+    alignSelf: 'center',
   },
   formGradient: {
     padding: 28,
@@ -953,25 +1014,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "#1F2937",
     letterSpacing: 0.3,
-  },
-
-  // Features Section
-  featuresContainer: {
-    marginBottom: 24,
-    paddingTop: 16,
-    borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
-  },
-  featureItem: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-    gap: 10,
-  },
-  featureText: {
-    fontSize: 14,
-    color: "#4B5563",
-    fontWeight: "600",
   },
 
   // Footer

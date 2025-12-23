@@ -27,6 +27,7 @@ import {
   Shield,
   Sun,
   ChevronRight,
+  School,
 } from "lucide-react-native";
 import { useNavigation } from "@react-navigation/native";
 import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
@@ -34,6 +35,7 @@ import { getFirestore, doc, getDoc } from "firebase/firestore";
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import haptics from "./utils/haptics"; 
+import { DollarSign, FileUp } from "lucide-react";
 
 interface SidebarProps {
   isOpen: boolean;
@@ -162,9 +164,9 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
     {
       title: "Content",
       items: [
-        { icon: Download, label: "Export Notes", screen: "ExportNotesScreen", badge: null },
-        { icon: Upload, label: "Upload File", screen: "UploadPDFScreen", badge: null },
-        { icon: Printer, label: "Print Notes", screen: "PrintNotesScreen", badge: null },
+        { icon: School, label: "Sync Classroom Notes", screen: "SyncClassroomScreen", badge: null },
+        { icon: FileUp, label: "Upload File", screen: "UploadPDFScreen", badge: null },
+        { icon: DollarSign, label: "Sell Notes", screen: "SellNotesScreen", badge: null },
       ],
     },
     {

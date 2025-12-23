@@ -1,5 +1,5 @@
 import React, { Component, ReactNode, useEffect } from "react";
-import 'nativewind'; // Import NativeWind's tailwind CSS setup
+import 'nativewind'; 
 
 import { Slot } from "expo-router/build";
 import Toast from "react-native-toast-message";
@@ -15,8 +15,8 @@ import ProfileScreen from './ProfileScreen';
 import RecordScreen from "./RecordScreen";
 import NotesScreen from "./NotesScreen";
 import PairedDevicesScreen from "./PairedDevicesScreen";
-import PrintNotesScreen from "./PrintNotesScreen";
-import ExportNotesScreen from "./ExportNotesScreen";
+import SellNotesScreen from "./SellNotesScreen";
+import SyncClassroomScreen from "./SyncClassroomScreen";
 import PrivacyScreen from "./PrivacyScreen";
 import UploadPDFScreen from "./UploadPDFScreen";
 import Sidebar from "./Sidebar";
@@ -71,7 +71,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
             {this.state.errorMessage}
           </Text>
           <Text style={{ fontSize: 12, color: '#999', textAlign: 'center' }}>
-            Please restart the app or contact support.
+            Please restart the app or contact support. Email :notetedd@gmail.com
           </Text>
         </View>
       );
@@ -111,9 +111,7 @@ export default function App() {
     }
   }, []);
 
-  // Your app code here
   
-    // Your app components
   
   return (
     <ErrorBoundary>
@@ -130,8 +128,8 @@ export default function App() {
           <Stack.Screen name="PaymentMethodsScreen" component={PaymentMethodsScreen} />
           <Stack.Screen name="NotificationsScreen" component={NotificationsScreen} />
           <Stack.Screen name="HelpSupportScreen" component={HelpSupportScreen} />
-          <Stack.Screen name="PrintNotesScreen" component={PrintNotesScreen} />
-          <Stack.Screen name="ExportNotesScreen" component={ExportNotesScreen} />
+          <Stack.Screen name="SellNotesScreen" component={SellNotesScreen} />
+          <Stack.Screen name="SyncClassroomScreen" component={SyncClassroomScreen} />
           <Stack.Screen name="PrivacyScreen" component={PrivacyScreen} />
           <Stack.Screen name="UploadPDFScreen" component={UploadPDFScreen} />
           <Stack.Screen name="PrefferencesScreen" component={PrefferencesScreen} />
