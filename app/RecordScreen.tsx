@@ -26,7 +26,7 @@ import { getAuth } from "firebase/auth";
 
 const { width } = Dimensions.get("window");
 
-// IMPORTANT: Replace with your actual AssemblyAI API key
+//  AssemblyAI API key
 const ASSEMBLYAI_API_KEY = "83b66f41846a49c19d62893c24e0ce34";
 
 const RECORDING_OPTIONS = {
@@ -480,13 +480,22 @@ export default function RecordScreen({ route }) {
     }
   };
 
-  // ==================== ASSEMBLYAI TRANSCRIPTION ====================
+   // ==================== ASSEMBLYAI TRANSCRIPTION ====================
   const transcribeWithAssemblyAI = async (uri) => {
     try {
-      console.log("🎯 Starting AI transcription...");
+      console.log("🎯 Starting AssemblyAI transcription...");
 
       if (!ASSEMBLYAI_API_KEY || ASSEMBLYAI_API_KEY.length < 10) {
-        throw new Error("AI API key not configured.");
+        throw new Error("AssemblyAI API key not configured.");
+      }
+
+      // Verify file exists on mobile
+      if (Platform.OS !== "web") {
+        const fileInfo = await FileSystem.getInfoAsync(uri);
+        if (!fileInfo.exists) {
+          throw new Error("Recording file not found at URI: " + uri);
+        }
+        console.log("✅ File verified, size:", fileInfo.size, "bytes");
       }
 
       let blob;
@@ -494,11 +503,6 @@ export default function RecordScreen({ route }) {
         const response = await fetch(uri);
         blob = await response.blob();
       } else {
-        const fileInfo = await FileSystem.getInfoAsync(uri);
-        if (!fileInfo.exists) {
-          throw new Error("Recording file not found");
-        }
-
         const base64 = await FileSystem.readAsStringAsync(uri, {
           encoding: FileSystem.EncodingType.Base64,
         });
@@ -542,7 +546,7 @@ export default function RecordScreen({ route }) {
           audio_url: uploadData.upload_url,
           punctuate: true,
           format_text: true,
-          language_detection: true, // Enable automatic language detection
+          language_detection: true,
         }),
       });
 
@@ -1388,8 +1392,8 @@ const styles = StyleSheet.create({
     backgroundColor: "#0F172A",
   },
   header: {
-    paddingTop: 60,
-    paddingBottom: 40,
+    paddingTop: 30,
+    paddingBottom: 20,
     paddingHorizontal: 24,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,

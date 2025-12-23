@@ -1,4 +1,4 @@
-
+// screens/SyncClassroomScreen.js
 import React, { useState, useEffect } from "react";
 import {
   View,
@@ -23,10 +23,10 @@ import { db, auth } from '../firebaseConfig';
 import { collection, addDoc, getDocs, query, where, serverTimestamp } from 'firebase/firestore';
 
 // Google OAuth Configuration
-const GOOGLE_CLIENT_ID = "561370693444-1fitng4mr9it94sbd1fd02fek2mp9ip4.apps.googleusercontent.com";
+const GOOGLE_CLIENT_ID = "378006316872-gn2he51al2pbfbtm20ukr2550imnso3a.apps.googleusercontent.com";
 const GOOGLE_REDIRECT_URI = AuthSession.makeRedirectUri({
-  scheme: 'https://auth.expo.io/@mande/notetedd',
-  path: 'https://auth.expo.io/@mande/notetedd'
+  scheme: 'myapp',
+  path: 'redirect'
 });
 
 // Google Classroom API Scopes
@@ -53,6 +53,7 @@ export default function SyncClassroomScreen({ navigation }) {
   const [showMaterialsModal, setShowMaterialsModal] = useState(false);
   const [processingProgress, setProcessingProgress] = useState("");
   const [userEmail, setUserEmail] = useState("");
+  const [showRedirectInfo, setShowRedirectInfo] = useState(false);
 
   // Gemini API Configuration
   const GEMINI_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI";
@@ -69,48 +70,23 @@ export default function SyncClassroomScreen({ navigation }) {
       clientId: GOOGLE_CLIENT_ID,
       scopes: CLASSROOM_SCOPES,
       redirectUri: GOOGLE_REDIRECT_URI,
-      responseType: AuthSession.ResponseType.Code,
-      usePKCE: true,
+      responseType: AuthSession.ResponseType.Token,
     },
     discovery
   );
-
-
-  const exchangeCodeForToken = async (code) => {
-  const tokenResponse = await AuthSession.exchangeCodeAsync(
-    {
-      clientId: GOOGLE_CLIENT_ID,
-      code,
-      redirectUri: GOOGLE_REDIRECT_URI,
-      extraParams: {
-        code_verifier: request.codeVerifier,
-      },
-    },
-    discovery
-  );
-
-  return tokenResponse.accessToken;
-};
 
   // Handle OAuth response
   useEffect(() => {
-  if (response?.type === 'success') {
-    const { code } = response.params;
-
-    (async () => {
-      try {
-        const token = await exchangeCodeForToken(code);
-        setAccessToken(token);
-        setIsAuthenticated(true);
-        fetchUserProfile(token);
-        fetchCourses(token);
-      } catch (e) {
-        Alert.alert('Auth Error', 'Failed to get access token');
-      }
-    })();
-  }
-}, [response]);
-
+    if (response?.type === 'success') {
+      const { access_token } = response.params;
+      setAccessToken(access_token);
+      setIsAuthenticated(true);
+      fetchUserProfile(access_token);
+      fetchCourses(access_token);
+    } else if (response?.type === 'error') {
+      Alert.alert('Authentication Error', 'Failed to authenticate with Google Classroom');
+    }
+  }, [response]);
 
   // Fetch user profile
   const fetchUserProfile = async (token) => {
@@ -553,6 +529,47 @@ Format as clean, readable plain text suitable for students.`;
               <Text style={styles.connectButtonText}>Connect with Google Classroom</Text>
             </TouchableOpacity>
 
+            {/* Debug Info - Show Redirect URI */}
+            <TouchableOpacity 
+              style={styles.debugButton}
+              onPress={() => setShowRedirectInfo(!showRedirectInfo)}
+            >
+              {/* <MaterialIcons name="info-outline" size={16} color="#6b7280" /> */}
+              {/* <Text style={styles.debugButtonText}>
+                {showRedirectInfo ? 'Hide' : 'Show'} Setup Instructions
+              </Text> */}
+            </TouchableOpacity>
+
+            {showRedirectInfo && (
+              <View style={styles.redirectInfoBox}>
+                <Text style={styles.redirectInfoTitle}>🔧 OAuth Setup Required</Text>
+                <Text style={styles.redirectInfoText}>
+                  Add this EXACT redirect URI to your Google Cloud Console:
+                </Text>
+                <View style={styles.redirectUriContainer}>
+                  <Text style={styles.redirectUri} selectable>
+                    https://auth.expo.io/@mande/notetedd
+                  </Text>
+                </View>
+                <Text style={styles.redirectInfoSteps}>
+                  Steps:{'\n'}
+                  1. Go to: console.cloud.google.com{'\n'}
+                  2. Select your project{'\n'}
+                  3. APIs & Services → Credentials{'\n'}
+                  4. Click your OAuth 2.0 Client ID{'\n'}
+                  5. Under "Authorized redirect URIs", click ADD URI{'\n'}
+                  6. Paste: https://auth.expo.io/@mande/notetedd{'\n'}
+                  7. Click SAVE and wait 1-2 minutes{'\n'}
+                  8. Try connecting again{'\n\n'}
+                  
+                  ⚠️ IMPORTANT:{'\n'}
+                  - Use EXACT URI above (no spaces){'\n'}
+                  - Application type must be "Web application"{'\n'}
+                  - Not "Android" or "iOS"
+                </Text>
+              </View>
+            )}
+
             <View style={styles.privacyNote}>
               <MaterialIcons name="lock" size={16} color="#6b7280" />
               <Text style={styles.privacyText}>
@@ -849,6 +866,57 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     flex: 1,
     lineHeight: 16,
+  },
+  debugButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 8,
+    marginTop: 8,
+  },
+  debugButtonText: {
+    fontSize: 12,
+    color: "#6b7280",
+    marginLeft: 4,
+    textDecorationLine: "underline",
+  },
+  redirectInfoBox: {
+    backgroundColor: "#fef3c7",
+    borderRadius: 8,
+    padding: 16,
+    marginTop: 12,
+    borderWidth: 1,
+    borderColor: "#fbbf24",
+  },
+  redirectInfoTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#92400e",
+    marginBottom: 8,
+  },
+  redirectInfoText: {
+    fontSize: 12,
+    color: "#78350f",
+    marginBottom: 8,
+    lineHeight: 16,
+  },
+  redirectUriContainer: {
+    backgroundColor: "#fff",
+    borderRadius: 6,
+    padding: 10,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#fbbf24",
+  },
+  redirectUri: {
+    fontSize: 11,
+    color: "#1f2937",
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+  redirectInfoSteps: {
+    fontSize: 11,
+    color: "#78350f",
+    lineHeight: 18,
   },
   connectedSection: {
     marginBottom: 24,

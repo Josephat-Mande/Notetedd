@@ -104,7 +104,7 @@ const OnboardingScreen = () => {
   };
 
   const handleGetStarted = () => {
-    alert('Welcome to Noteted! 🎉\n\nLet\'s revolutionize your learning!');
+    
     router.push('AuthScreen');
   };
 

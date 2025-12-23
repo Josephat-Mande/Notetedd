@@ -176,7 +176,7 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
         { icon: Bell, label: "Notifications", screen: "NotificationsScreen", badge: null,  },
         { icon: isDark ? Sun : Moon, label: "Dark Mode", screen: "", badge: null, toggle: true, isTheme: true },
         { icon: Shield, label: "Privacy", screen: "PrivacyScreen", badge: null },
-        // { icon: Settings, label: "Preferences", screen: "PreferencesScreen", badge: null },
+        
       ],
     },
     {
