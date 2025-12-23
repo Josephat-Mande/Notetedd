@@ -15,12 +15,13 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import { Audio } from 'expo-av';
+import * as Speech from 'expo-speech';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import haptics from "./utils/haptics";
 import { getFirestore, collection, query, where, orderBy, getDocs } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
-const GROQ_API_KEY = "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";
+const GOOGLE_TTS_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI";
 
 export default function AudioNotesScreen({ navigation, route }) {
   const theme = route?.params?.theme || "light";
@@ -32,7 +33,6 @@ export default function AudioNotesScreen({ navigation, route }) {
   const [selectedNote, setSelectedNote] = useState(null);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
-  const [filterCategory, setFilterCategory] = useState("all");
   
   // Player state
   const [isPlaying, setIsPlaying] = useState(false);
@@ -43,6 +43,7 @@ export default function AudioNotesScreen({ navigation, route }) {
   const [audioFormat, setAudioFormat] = useState("summary");
   const [playbackPosition, setPlaybackPosition] = useState(0);
   const [playbackDuration, setPlaybackDuration] = useState(0);
+  const [useCloudTTS, setUseCloudTTS] = useState(false);
 
   // Firebase
   const auth = getAuth();
@@ -50,7 +51,7 @@ export default function AudioNotesScreen({ navigation, route }) {
 
   // Audio references
   const soundRef = useRef(null);
-  const utteranceRef = useRef(null);
+  const speechRef = useRef(null);
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -142,6 +143,12 @@ export default function AudioNotesScreen({ navigation, route }) {
           window.speechSynthesis.cancel();
         }
       } else {
+        // Stop expo-speech
+        if (await Speech.isSpeakingAsync()) {
+          Speech.stop();
+        }
+        
+        // Cleanup audio sound
         if (soundRef.current) {
           await soundRef.current.stopAsync();
           await soundRef.current.unloadAsync();
@@ -162,7 +169,6 @@ export default function AudioNotesScreen({ navigation, route }) {
 
       const currentUser = auth.currentUser;
 
-      // Fetch from Firestore
       if (currentUser) {
         try {
           const recordingsRef = collection(db, "recordings");
@@ -191,7 +197,6 @@ export default function AudioNotesScreen({ navigation, route }) {
         }
       }
 
-      // Fallback to AsyncStorage
       try {
         const savedNotes = await AsyncStorage.getItem('organizedNotes');
         if (savedNotes && notes.length === 0) {
@@ -247,6 +252,8 @@ export default function AudioNotesScreen({ navigation, route }) {
     await cleanupAudio();
     setIsPlaying(false);
     setIsPaused(false);
+    setPlaybackPosition(0);
+    setPlaybackDuration(0);
     setSelectedNote(null);
     setViewMode("selection");
   };
@@ -366,7 +373,6 @@ export default function AudioNotesScreen({ navigation, route }) {
       };
 
       window.speechSynthesis.speak(utterance);
-      utteranceRef.current = utterance;
 
     } catch (error) {
       console.error("❌ Web speech error:", error);
@@ -375,25 +381,97 @@ export default function AudioNotesScreen({ navigation, route }) {
     }
   };
 
-  // ==================== GOOGLE CLOUD TTS API (iOS/Android) ====================
-  const generateAudioWithTTS = async () => {
+  // ==================== EXPO SPEECH API (iOS/Android - Native TTS) ====================
+  const generateAudioWithExpoSpeech = async () => {
+    try {
+      console.log("🎙️ Generating audio with Expo Speech (Native TTS)...");
+      
+      const script = generateAudioScript();
+      
+      // Get available voices
+      const voices = await Speech.getAvailableVoicesAsync();
+      console.log(`Available voices: ${voices.length}`);
+      
+      let voiceIdentifier = null;
+      
+      // Try to select voice based on user preference
+      if (voices.length > 0) {
+        if (selectedVoice === "female") {
+          const femaleVoice = voices.find(v => 
+            v.identifier.toLowerCase().includes('female') ||
+            v.identifier.toLowerCase().includes('samantha') ||
+            v.name.toLowerCase().includes('female')
+          );
+          voiceIdentifier = femaleVoice?.identifier;
+        } else if (selectedVoice === "male") {
+          const maleVoice = voices.find(v => 
+            v.identifier.toLowerCase().includes('male') ||
+            v.identifier.toLowerCase().includes('daniel') ||
+            v.name.toLowerCase().includes('male')
+          );
+          voiceIdentifier = maleVoice?.identifier;
+        }
+      }
+
+      // Speech options
+      const options = {
+        rate: playbackSpeed,
+        pitch: 1.0,
+        language: 'en-US',
+        voice: voiceIdentifier,
+        onStart: () => {
+          console.log("🎤 Speech started");
+          setIsPlaying(true);
+          setIsPaused(false);
+          setGeneratingAudio(false);
+        },
+        onDone: () => {
+          console.log("✅ Speech completed");
+          setIsPlaying(false);
+          setIsPaused(false);
+          setPlaybackPosition(0);
+        },
+        onStopped: () => {
+          console.log("⏹️ Speech stopped");
+          setIsPlaying(false);
+          setIsPaused(false);
+          setPlaybackPosition(0);
+        },
+        onError: (error) => {
+          console.error("❌ Speech error:", error);
+          setGeneratingAudio(false);
+          setIsPlaying(false);
+          Alert.alert("Error", "Failed to generate audio");
+        }
+      };
+
+      // Start speaking
+      await Speech.speak(script, options);
+      speechRef.current = script;
+
+    } catch (error) {
+      console.error("❌ Expo Speech error:", error);
+      setGeneratingAudio(false);
+      Alert.alert("Error", "Failed to generate audio with device TTS");
+      throw error;
+    }
+  };
+
+  // ==================== GOOGLE CLOUD TTS API (iOS/Android - Cloud TTS) ====================
+  const generateAudioWithCloudTTS = async () => {
     try {
       console.log("🎙️ Generating audio with Google Cloud TTS...");
       
       const script = generateAudioScript();
       
-      // Google Cloud Text-to-Speech API
-      const GOOGLE_TTS_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI"; 
-      
-      // Voice configuration based on selectedVoice
-      let voiceName = "en-US-Neural2-C"; // Default neutral voice
+      let voiceName = "en-US-Neural2-C";
       let ssmlGender = "NEUTRAL";
       
       if (selectedVoice === "female") {
-        voiceName = "en-US-Neural2-F"; // Female voice
+        voiceName = "en-US-Neural2-F";
         ssmlGender = "FEMALE";
       } else if (selectedVoice === "male") {
-        voiceName = "en-US-Neural2-D"; // Male voice
+        voiceName = "en-US-Neural2-D";
         ssmlGender = "MALE";
       }
       
@@ -431,18 +509,14 @@ export default function AudioNotesScreen({ navigation, route }) {
       }
 
       const data = await response.json();
-      
-      // Google returns base64 encoded audio in audioContent field
       const audioBase64 = data.audioContent;
       
       if (!audioBase64) {
         throw new Error("No audio content received from API");
       }
 
-      // Convert base64 to blob/uri for playback
       const audioUri = `data:audio/mp3;base64,${audioBase64}`;
 
-      // Load and play audio using Expo Audio
       const { sound } = await Audio.Sound.createAsync(
         { uri: audioUri },
         { 
@@ -460,51 +534,25 @@ export default function AudioNotesScreen({ navigation, route }) {
       setIsPaused(false);
       setGeneratingAudio(false);
 
-      console.log("✅ Audio generated and playing");
+      console.log("✅ Cloud audio generated and playing");
 
     } catch (error) {
       console.error("❌ Google TTS generation error:", error);
       setGeneratingAudio(false);
       
-      // Fallback to native TTS if Google API fails
       Alert.alert(
         "Cloud TTS Unavailable",
-        "Falling back to device text-to-speech. ",
+        "Falling back to device text-to-speech.",
         [
           {
             text: "OK",
-            onPress: () => generateAudioWithNativeTTS()
+            onPress: () => {
+              setUseCloudTTS(false);
+              setTimeout(() => generateAudioWithExpoSpeech(), 100);
+            }
           }
         ]
       );
-    }
-  };
-
-  // Alternative: Use device's native TTS (fallback)
-  const generateAudioWithNativeTTS = async () => {
-    try {
-      console.log("🎙️ Using native TTS fallback...");
-      
-      // For now, show a message that audio will be generated
-      Alert.alert(
-        "Audio Generation",
-        "Generating audio using device text-to-speech. Note: This is a basic implementation. For better quality, consider adding a cloud TTS service.",
-        [{ text: "OK" }]
-      );
-      
-      // You can implement Speech API from expo-speech here
-      // import * as Speech from 'expo-speech';
-      // Speech.speak(generateAudioScript(), {
-      //   rate: playbackSpeed,
-      //   onDone: () => setIsPlaying(false),
-      //   onStart: () => setIsPlaying(true),
-      // });
-      
-      setGeneratingAudio(false);
-    } catch (error) {
-      console.error("❌ Native TTS error:", error);
-      setGeneratingAudio(false);
-      throw error;
     }
   };
 
@@ -537,16 +585,25 @@ export default function AudioNotesScreen({ navigation, route }) {
         }
       } else {
         // iOS/Android
-        if (soundRef.current) {
-          if (isPaused) {
-            await soundRef.current.playAsync();
-            setIsPaused(false);
-            setGeneratingAudio(false);
+        if (useCloudTTS) {
+          // Use Cloud TTS with Expo Audio
+          if (soundRef.current) {
+            if (isPaused) {
+              await soundRef.current.playAsync();
+              setIsPaused(false);
+              setGeneratingAudio(false);
+            }
+          } else {
+            await generateAudioWithCloudTTS();
           }
         } else {
-          // Generate new audio
-          await generateAudioWithNativeTTS();
-          // For production, use: await generateAudioWithTTS();
+          // Use Native Expo Speech
+          if (isPaused) {
+            // Resume not directly supported, restart speech
+            await generateAudioWithExpoSpeech();
+          } else if (!isPlaying) {
+            await generateAudioWithExpoSpeech();
+          }
         }
       }
     } catch (error) {
@@ -566,9 +623,16 @@ export default function AudioNotesScreen({ navigation, route }) {
           setIsPaused(true);
         }
       } else {
-        if (soundRef.current) {
+        if (useCloudTTS && soundRef.current) {
           await soundRef.current.pauseAsync();
           setIsPaused(true);
+        } else {
+          // Expo Speech doesn't support pause, so we stop
+          if (await Speech.isSpeakingAsync()) {
+            Speech.stop();
+            setIsPlaying(false);
+            setIsPaused(false);
+          }
         }
       }
     } catch (error) {
@@ -585,9 +649,13 @@ export default function AudioNotesScreen({ navigation, route }) {
           window.speechSynthesis.cancel();
         }
       } else {
-        if (soundRef.current) {
+        if (useCloudTTS && soundRef.current) {
           await soundRef.current.stopAsync();
           await soundRef.current.setPositionAsync(0);
+        } else {
+          if (await Speech.isSpeakingAsync()) {
+            Speech.stop();
+          }
         }
       }
       
@@ -608,19 +676,34 @@ export default function AudioNotesScreen({ navigation, route }) {
       setPlaybackSpeed(nextSpeed);
 
       if (isPlaying) {
-        if (Platform.OS === "web") {
-          window.speechSynthesis.cancel();
-          setIsPlaying(false);
-          setTimeout(() => generateAudioWithWebSpeech(), 100);
-        } else {
-          if (soundRef.current) {
-            await soundRef.current.setRateAsync(nextSpeed, true);
-          }
-        }
+        await handleStop();
+        setTimeout(async () => {
+          await handlePlay();
+        }, 100);
       }
     } catch (error) {
       console.error("❌ Speed change error:", error);
     }
+  };
+
+  const toggleTTSMode = async () => {
+    if (Platform.OS === "web") return;
+    
+    await haptics.impact("Light");
+    
+    if (isPlaying) {
+      await handleStop();
+    }
+    
+    setUseCloudTTS(!useCloudTTS);
+    
+    Alert.alert(
+      "TTS Mode Changed",
+      useCloudTTS 
+        ? "Switched to device text-to-speech" 
+        : "Switched to cloud text-to-speech (higher quality)",
+      [{ text: "OK" }]
+    );
   };
 
   const formatTime = (seconds) => {
@@ -696,7 +779,6 @@ export default function AudioNotesScreen({ navigation, route }) {
   // ==================== RENDER SELECTION VIEW ====================
   const renderSelectionView = () => (
     <Animated.View style={{ opacity: fadeAnim }}>
-      {/* Search Bar */}
       <View style={[styles.searchContainer, isDark && styles.searchContainerDark]}>
         <MaterialIcons name="search" size={20} color="#9CA3AF" />
         <TextInput
@@ -713,7 +795,6 @@ export default function AudioNotesScreen({ navigation, route }) {
         )}
       </View>
 
-      {/* Stats Card */}
       <View style={[styles.statsCard, isDark && styles.statsCardDark]}>
         <View style={styles.statItem}>
           <Text style={[styles.statNumber, isDark && styles.textDark]}>{allNotes.length}</Text>
@@ -733,7 +814,6 @@ export default function AudioNotesScreen({ navigation, route }) {
         </View>
       </View>
 
-      {/* Notes List */}
       {getFilteredNotes().length === 0 ? (
         <View style={[styles.emptyContainer, isDark && styles.emptyContainerDark]}>
           <MaterialIcons name="library-music" size={64} color="#D1D5DB" />
@@ -779,7 +859,6 @@ export default function AudioNotesScreen({ navigation, route }) {
 
     return (
       <Animated.View style={{ opacity: fadeAnim }}>
-        {/* Back Button */}
         <TouchableOpacity 
           style={[styles.backButton, isDark && styles.backButtonDark]}
           onPress={backToSelection}
@@ -788,7 +867,6 @@ export default function AudioNotesScreen({ navigation, route }) {
           <Text style={[styles.backButtonText, isDark && styles.textDark]}>Back to Notes</Text>
         </TouchableOpacity>
 
-        {/* Player Card */}
         <View style={[styles.playerCard, isDark && styles.playerCardDark]}>
           <View style={styles.lectureInfo}>
             <Text style={[styles.lectureTitle, isDark && styles.textDark]}>
@@ -799,7 +877,6 @@ export default function AudioNotesScreen({ navigation, route }) {
             </Text>
           </View>
 
-          {/* Audio Visualizer */}
           <View style={styles.visualizerContainer}>
             {isPlaying && !isPaused ? (
               <View style={styles.wavesContainer}>
@@ -831,8 +908,7 @@ export default function AudioNotesScreen({ navigation, route }) {
             )}
           </View>
 
-          {/* Progress Bar (for native audio) */}
-          {Platform.OS !== "web" && playbackDuration > 0 && (
+          {Platform.OS !== "web" && useCloudTTS && playbackDuration > 0 && (
             <View style={styles.progressContainer}>
               <Text style={[styles.timeText, isDark && styles.textSecondaryDark]}>
                 {formatTime(playbackPosition)}
@@ -851,7 +927,6 @@ export default function AudioNotesScreen({ navigation, route }) {
             </View>
           )}
 
-          {/* Play Button */}
           <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
             <TouchableOpacity
               style={[styles.playButton, isPlaying && styles.playButtonActive]}
@@ -879,7 +954,6 @@ export default function AudioNotesScreen({ navigation, route }) {
             </TouchableOpacity>
           </Animated.View>
 
-          {/* Controls */}
           <View style={styles.controls}>
             <TouchableOpacity
               style={styles.controlButton}
@@ -914,7 +988,6 @@ export default function AudioNotesScreen({ navigation, route }) {
           </Text>
         </View>
 
-        {/* Audio Format Selection */}
         <View style={[styles.section, isDark && styles.sectionDark]}>
           <View style={styles.sectionHeader}>
             <MaterialIcons name="tune" size={24} color="#9B5DE5" />
@@ -962,7 +1035,6 @@ export default function AudioNotesScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Voice Selection (Web only) */}
         {Platform.OS === "web" && (
           <View style={[styles.section, isDark && styles.sectionDark]}>
             <View style={styles.sectionHeader}>
@@ -1002,13 +1074,47 @@ export default function AudioNotesScreen({ navigation, route }) {
           </View>
         )}
 
-        {/* Platform Info */}
+        {Platform.OS !== "web" && (
+          <View style={[styles.section, isDark && styles.sectionDark]}>
+            <View style={styles.sectionHeader}>
+              <MaterialIcons name="cloud-queue" size={24} color="#F59E0B" />
+              <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+                TTS Mode
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.ttsToggle, isDark && styles.ttsToggleDark]}
+              onPress={toggleTTSMode}
+            >
+              <View style={styles.ttsToggleLeft}>
+                <MaterialIcons 
+                  name={useCloudTTS ? "cloud" : "phone-android"} 
+                  size={24} 
+                  color={useCloudTTS ? "#10B981" : "#9B5DE5"} 
+                />
+                <View>
+                  <Text style={[styles.ttsToggleTitle, isDark && styles.textDark]}>
+                    {useCloudTTS ? "Cloud TTS" : "Device TTS"}
+                  </Text>
+                  <Text style={[styles.ttsToggleSubtitle, isDark && styles.textSecondaryDark]}>
+                    {useCloudTTS ? "High quality, Google voices" : "Native device voices"}
+                  </Text>
+                </View>
+              </View>
+              <MaterialIcons name="swap-horiz" size={24} color="#9CA3AF" />
+            </TouchableOpacity>
+          </View>
+        )}
+
         <View style={[styles.noticeCard, isDark && styles.noticeCardDark]}>
           <MaterialIcons name="info-outline" size={24} color="#10B981" />
           <Text style={[styles.noticeText, isDark && styles.textDark]}>
             {Platform.OS === "web" 
               ? "Using browser text-to-speech for audio playback"
-              : "Using device text-to-speech. For premium voices, upgrade to cloud TTS"}
+              : useCloudTTS
+              ? "Using Google Cloud TTS for premium audio quality"
+              : "Using device text-to-speech. Switch to Cloud TTS for better quality"}
           </Text>
         </View>
       </Animated.View>
@@ -1017,7 +1123,6 @@ export default function AudioNotesScreen({ navigation, route }) {
 
   return (
     <View style={[styles.container, isDark && styles.containerDark]}>
-      {/* Header */}
       <LinearGradient
         colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
         style={styles.header}
@@ -1525,6 +1630,36 @@ const styles = StyleSheet.create({
   },
   voiceButtonTextActive: {
     color: "#059669",
+  },
+  ttsToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#F9FAFB",
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: "#E5E7EB",
+  },
+  ttsToggleDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
+  },
+  ttsToggleLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
+  ttsToggleTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#1F2937",
+  },
+  ttsToggleSubtitle: {
+    fontSize: 12,
+    color: "#6B7280",
+    marginTop: 2,
   },
   noticeCard: {
     backgroundColor: "#D1FAE5",
