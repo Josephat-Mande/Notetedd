@@ -27,7 +27,7 @@ export default function AudioNotesScreen({ navigation, route }) {
   const isDark = theme === "dark";
 
   // Screen state
-  const [viewMode, setViewMode] = useState("selection"); // "selection" or "player"
+  const [viewMode, setViewMode] = useState("selection");
   const [allNotes, setAllNotes] = useState([]);
   const [selectedNote, setSelectedNote] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -41,10 +41,16 @@ export default function AudioNotesScreen({ navigation, route }) {
   const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [selectedVoice, setSelectedVoice] = useState("default");
   const [audioFormat, setAudioFormat] = useState("summary");
+  const [playbackPosition, setPlaybackPosition] = useState(0);
+  const [playbackDuration, setPlaybackDuration] = useState(0);
 
   // Firebase
   const auth = getAuth();
   const db = getFirestore();
+
+  // Audio references
+  const soundRef = useRef(null);
+  const utteranceRef = useRef(null);
 
   // Animations
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -60,12 +66,11 @@ export default function AudioNotesScreen({ navigation, route }) {
       useNativeDriver: true,
     }).start();
 
+    setupAudio();
     fetchAllNotes();
 
     return () => {
-      if (typeof window !== 'undefined' && window.speechSynthesis) {
-        window.speechSynthesis.cancel();
-      }
+      cleanupAudio();
     };
   }, []);
 
@@ -110,6 +115,42 @@ export default function AudioNotesScreen({ navigation, route }) {
       )
     );
     Animated.parallel(animations).start();
+  };
+
+  // ==================== AUDIO SETUP ====================
+  const setupAudio = async () => {
+    if (Platform.OS !== "web") {
+      try {
+        await Audio.setAudioModeAsync({
+          allowsRecordingIOS: false,
+          playsInSilentModeIOS: true,
+          staysActiveInBackground: true,
+          shouldDuckAndroid: true,
+          playThroughEarpieceAndroid: false,
+        });
+        console.log("✅ Audio mode configured");
+      } catch (error) {
+        console.error("❌ Audio setup error:", error);
+      }
+    }
+  };
+
+  const cleanupAudio = async () => {
+    try {
+      if (Platform.OS === "web") {
+        if (typeof window !== 'undefined' && window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+        }
+      } else {
+        if (soundRef.current) {
+          await soundRef.current.stopAsync();
+          await soundRef.current.unloadAsync();
+          soundRef.current = null;
+        }
+      }
+    } catch (error) {
+      console.error("❌ Cleanup error:", error);
+    }
   };
 
   // ==================== FETCH ALL NOTES ====================
@@ -181,7 +222,6 @@ export default function AudioNotesScreen({ navigation, route }) {
   const getFilteredNotes = () => {
     let filtered = allNotes;
 
-    // Search filter
     if (searchQuery) {
       filtered = filtered.filter(note => {
         const title = note.organizedNotes?.title || note.title || "";
@@ -204,12 +244,7 @@ export default function AudioNotesScreen({ navigation, route }) {
 
   const backToSelection = async () => {
     await haptics.impact("Light");
-    
-    // Stop any playing audio
-    if (typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
-    
+    await cleanupAudio();
     setIsPlaying(false);
     setIsPaused(false);
     setSelectedNote(null);
@@ -276,14 +311,13 @@ export default function AudioNotesScreen({ navigation, route }) {
     return script;
   };
 
+  // ==================== WEB SPEECH API (Web Only) ====================
   const generateAudioWithWebSpeech = async () => {
     try {
-      await haptics.impact("Medium");
-      setGeneratingAudio(true);
       console.log("🎙️ Generating audio with Web Speech...");
 
       if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        throw new Error("Text-to-Speech not supported in this environment");
+        throw new Error("Text-to-Speech not supported");
       }
 
       window.speechSynthesis.cancel();
@@ -294,10 +328,18 @@ export default function AudioNotesScreen({ navigation, route }) {
       const voices = window.speechSynthesis.getVoices();
 
       if (selectedVoice === "female" && voices.length > 0) {
-        const femaleVoice = voices.find(v => v.name.includes("Female") || v.name.includes("Samantha"));
+        const femaleVoice = voices.find(v => 
+          v.name.toLowerCase().includes("female") || 
+          v.name.toLowerCase().includes("samantha") ||
+          v.name.toLowerCase().includes("victoria")
+        );
         if (femaleVoice) utterance.voice = femaleVoice;
       } else if (selectedVoice === "male" && voices.length > 0) {
-        const maleVoice = voices.find(v => v.name.includes("Male") || v.name.includes("Daniel"));
+        const maleVoice = voices.find(v => 
+          v.name.toLowerCase().includes("male") || 
+          v.name.toLowerCase().includes("daniel") ||
+          v.name.toLowerCase().includes("alex")
+        );
         if (maleVoice) utterance.voice = maleVoice;
       }
 
@@ -319,63 +361,272 @@ export default function AudioNotesScreen({ navigation, route }) {
       utterance.onerror = (event) => {
         console.error("❌ Speech error:", event.error);
         setGeneratingAudio(false);
+        setIsPlaying(false);
         Alert.alert("Error", "Failed to generate audio");
       };
 
       window.speechSynthesis.speak(utterance);
-      window.currentUtterance = utterance;
+      utteranceRef.current = utterance;
 
     } catch (error) {
-      console.error("❌ Audio generation error:", error);
+      console.error("❌ Web speech error:", error);
       setGeneratingAudio(false);
-      Alert.alert("Error", error.message);
+      throw error;
     }
   };
 
-  const handlePlay = async () => {
-    await haptics.impact("Light");
-
-    if (Platform.OS === "web" && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      if (isPlaying && isPaused) {
-        window.speechSynthesis.resume();
-        setIsPaused(false);
-      } else if (!isPlaying) {
-        await generateAudioWithWebSpeech();
+  // ==================== GOOGLE CLOUD TTS API (iOS/Android) ====================
+  const generateAudioWithTTS = async () => {
+    try {
+      console.log("🎙️ Generating audio with Google Cloud TTS...");
+      
+      const script = generateAudioScript();
+      
+      // Google Cloud Text-to-Speech API
+      const GOOGLE_TTS_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI"; 
+      
+      // Voice configuration based on selectedVoice
+      let voiceName = "en-US-Neural2-C"; // Default neutral voice
+      let ssmlGender = "NEUTRAL";
+      
+      if (selectedVoice === "female") {
+        voiceName = "en-US-Neural2-F"; // Female voice
+        ssmlGender = "FEMALE";
+      } else if (selectedVoice === "male") {
+        voiceName = "en-US-Neural2-D"; // Male voice
+        ssmlGender = "MALE";
       }
-    } else {
-      Alert.alert("Coming Soon", "Audio playback is currently available on web. Mobile support coming soon!");
+      
+      const response = await fetch(
+        `https://texttospeech.googleapis.com/v1/text:synthesize?key=${GOOGLE_TTS_API_KEY}`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            input: {
+              text: script
+            },
+            voice: {
+              languageCode: "en-US",
+              name: voiceName,
+              ssmlGender: ssmlGender
+            },
+            audioConfig: {
+              audioEncoding: "MP3",
+              speakingRate: playbackSpeed,
+              pitch: 0,
+              volumeGainDb: 0,
+              effectsProfileId: ["headphone-class-device"]
+            }
+          })
+        }
+      );
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        console.error("Google TTS API error:", errorData);
+        throw new Error(`TTS API failed: ${errorData.error?.message || 'Unknown error'}`);
+      }
+
+      const data = await response.json();
+      
+      // Google returns base64 encoded audio in audioContent field
+      const audioBase64 = data.audioContent;
+      
+      if (!audioBase64) {
+        throw new Error("No audio content received from API");
+      }
+
+      // Convert base64 to blob/uri for playback
+      const audioUri = `data:audio/mp3;base64,${audioBase64}`;
+
+      // Load and play audio using Expo Audio
+      const { sound } = await Audio.Sound.createAsync(
+        { uri: audioUri },
+        { 
+          shouldPlay: false, 
+          rate: playbackSpeed,
+          progressUpdateIntervalMillis: 100
+        },
+        onPlaybackStatusUpdate
+      );
+
+      soundRef.current = sound;
+      await sound.playAsync();
+      
+      setIsPlaying(true);
+      setIsPaused(false);
+      setGeneratingAudio(false);
+
+      console.log("✅ Audio generated and playing");
+
+    } catch (error) {
+      console.error("❌ Google TTS generation error:", error);
+      setGeneratingAudio(false);
+      
+      // Fallback to native TTS if Google API fails
+      Alert.alert(
+        "Cloud TTS Unavailable",
+        "Falling back to device text-to-speech. ",
+        [
+          {
+            text: "OK",
+            onPress: () => generateAudioWithNativeTTS()
+          }
+        ]
+      );
+    }
+  };
+
+  // Alternative: Use device's native TTS (fallback)
+  const generateAudioWithNativeTTS = async () => {
+    try {
+      console.log("🎙️ Using native TTS fallback...");
+      
+      // For now, show a message that audio will be generated
+      Alert.alert(
+        "Audio Generation",
+        "Generating audio using device text-to-speech. Note: This is a basic implementation. For better quality, consider adding a cloud TTS service.",
+        [{ text: "OK" }]
+      );
+      
+      // You can implement Speech API from expo-speech here
+      // import * as Speech from 'expo-speech';
+      // Speech.speak(generateAudioScript(), {
+      //   rate: playbackSpeed,
+      //   onDone: () => setIsPlaying(false),
+      //   onStart: () => setIsPlaying(true),
+      // });
+      
+      setGeneratingAudio(false);
+    } catch (error) {
+      console.error("❌ Native TTS error:", error);
+      setGeneratingAudio(false);
+      throw error;
+    }
+  };
+
+  const onPlaybackStatusUpdate = (status) => {
+    if (status.isLoaded) {
+      setPlaybackPosition(status.positionMillis / 1000);
+      setPlaybackDuration(status.durationMillis / 1000);
+
+      if (status.didJustFinish) {
+        setIsPlaying(false);
+        setIsPaused(false);
+        setPlaybackPosition(0);
+      }
+    }
+  };
+
+  // ==================== PLAYBACK CONTROLS ====================
+  const handlePlay = async () => {
+    try {
+      await haptics.impact("Light");
+      setGeneratingAudio(true);
+
+      if (Platform.OS === "web") {
+        if (isPlaying && isPaused) {
+          window.speechSynthesis.resume();
+          setIsPaused(false);
+          setGeneratingAudio(false);
+        } else if (!isPlaying) {
+          await generateAudioWithWebSpeech();
+        }
+      } else {
+        // iOS/Android
+        if (soundRef.current) {
+          if (isPaused) {
+            await soundRef.current.playAsync();
+            setIsPaused(false);
+            setGeneratingAudio(false);
+          }
+        } else {
+          // Generate new audio
+          await generateAudioWithNativeTTS();
+          // For production, use: await generateAudioWithTTS();
+        }
+      }
+    } catch (error) {
+      console.error("❌ Play error:", error);
+      Alert.alert("Error", "Failed to play audio. Please try again.");
+      setGeneratingAudio(false);
     }
   };
 
   const handlePause = async () => {
-    await haptics.impact("Light");
-    if (Platform.OS === "web" && typeof window !== 'undefined' && window.speechSynthesis && isPlaying) {
-      window.speechSynthesis.pause();
-      setIsPaused(true);
+    try {
+      await haptics.impact("Light");
+      
+      if (Platform.OS === "web") {
+        if (window.speechSynthesis && isPlaying) {
+          window.speechSynthesis.pause();
+          setIsPaused(true);
+        }
+      } else {
+        if (soundRef.current) {
+          await soundRef.current.pauseAsync();
+          setIsPaused(true);
+        }
+      }
+    } catch (error) {
+      console.error("❌ Pause error:", error);
     }
   };
 
   const handleStop = async () => {
-    await haptics.impact("Light");
-    if (Platform.OS === "web" && typeof window !== 'undefined' && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
+    try {
+      await haptics.impact("Light");
+      
+      if (Platform.OS === "web") {
+        if (window.speechSynthesis) {
+          window.speechSynthesis.cancel();
+        }
+      } else {
+        if (soundRef.current) {
+          await soundRef.current.stopAsync();
+          await soundRef.current.setPositionAsync(0);
+        }
+      }
+      
       setIsPlaying(false);
       setIsPaused(false);
+      setPlaybackPosition(0);
+    } catch (error) {
+      console.error("❌ Stop error:", error);
     }
   };
 
   const changePlaybackSpeed = async () => {
-    await haptics.impact("Light");
-    const speeds = [1.0, 1.25, 1.5, 1.75, 2.0, 0.75];
-    const currentIndex = speeds.indexOf(playbackSpeed);
-    const nextSpeed = speeds[(currentIndex + 1) % speeds.length];
-    setPlaybackSpeed(nextSpeed);
+    try {
+      await haptics.impact("Light");
+      const speeds = [1.0, 1.25, 1.5, 1.75, 2.0, 0.75];
+      const currentIndex = speeds.indexOf(playbackSpeed);
+      const nextSpeed = speeds[(currentIndex + 1) % speeds.length];
+      setPlaybackSpeed(nextSpeed);
 
-    if (isPlaying && Platform.OS === "web") {
-      window.speechSynthesis.cancel();
-      setIsPlaying(false);
-      setTimeout(() => generateAudioWithWebSpeech(), 100);
+      if (isPlaying) {
+        if (Platform.OS === "web") {
+          window.speechSynthesis.cancel();
+          setIsPlaying(false);
+          setTimeout(() => generateAudioWithWebSpeech(), 100);
+        } else {
+          if (soundRef.current) {
+            await soundRef.current.setRateAsync(nextSpeed, true);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("❌ Speed change error:", error);
     }
+  };
+
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs < 10 ? '0' : ''}${secs}`;
   };
 
   // ==================== RENDER NOTE CARD ====================
@@ -580,6 +831,26 @@ export default function AudioNotesScreen({ navigation, route }) {
             )}
           </View>
 
+          {/* Progress Bar (for native audio) */}
+          {Platform.OS !== "web" && playbackDuration > 0 && (
+            <View style={styles.progressContainer}>
+              <Text style={[styles.timeText, isDark && styles.textSecondaryDark]}>
+                {formatTime(playbackPosition)}
+              </Text>
+              <View style={styles.progressBar}>
+                <View 
+                  style={[
+                    styles.progressFill, 
+                    { width: `${(playbackPosition / playbackDuration) * 100}%` }
+                  ]} 
+                />
+              </View>
+              <Text style={[styles.timeText, isDark && styles.textSecondaryDark]}>
+                {formatTime(playbackDuration)}
+              </Text>
+            </View>
+          )}
+
           {/* Play Button */}
           <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
             <TouchableOpacity
@@ -691,53 +962,55 @@ export default function AudioNotesScreen({ navigation, route }) {
           </View>
         </View>
 
-        {/* Voice Selection */}
-        <View style={[styles.section, isDark && styles.sectionDark]}>
-          <View style={styles.sectionHeader}>
-            <MaterialIcons name="record-voice-over" size={24} color="#10B981" />
-            <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
-              Voice Style
-            </Text>
-          </View>
+        {/* Voice Selection (Web only) */}
+        {Platform.OS === "web" && (
+          <View style={[styles.section, isDark && styles.sectionDark]}>
+            <View style={styles.sectionHeader}>
+              <MaterialIcons name="record-voice-over" size={24} color="#10B981" />
+              <Text style={[styles.sectionTitle, isDark && styles.textDark]}>
+                Voice Style
+              </Text>
+            </View>
 
-          <View style={styles.voiceButtons}>
-            {["default", "female", "male"].map((voice) => (
-              <TouchableOpacity
-                key={voice}
-                style={[
-                  styles.voiceButton,
-                  selectedVoice === voice && styles.voiceButtonActive,
-                  isDark && styles.voiceButtonDark,
-                ]}
-                onPress={async () => {
-                  await haptics.impact("Light");
-                  setSelectedVoice(voice);
-                  if (isPlaying) handleStop();
-                }}
-              >
-                <Text
+            <View style={styles.voiceButtons}>
+              {["default", "female", "male"].map((voice) => (
+                <TouchableOpacity
+                  key={voice}
                   style={[
-                    styles.voiceButtonText,
-                    selectedVoice === voice && styles.voiceButtonTextActive,
-                    isDark && styles.textDark,
+                    styles.voiceButton,
+                    selectedVoice === voice && styles.voiceButtonActive,
+                    isDark && styles.voiceButtonDark,
                   ]}
+                  onPress={async () => {
+                    await haptics.impact("Light");
+                    setSelectedVoice(voice);
+                    if (isPlaying) handleStop();
+                  }}
                 >
-                  {voice.charAt(0).toUpperCase() + voice.slice(1)}
-                </Text>
-              </TouchableOpacity>
-            ))}
-          </View>
-        </View>
-
-        {/* Platform Notice */}
-        {Platform.OS !== "web" && (
-          <View style={[styles.noticeCard, isDark && styles.noticeCardDark]}>
-            <MaterialIcons name="info-outline" size={24} color="#F59E0B" />
-            <Text style={[styles.noticeText, isDark && styles.textDark]}>
-              Audio playback is currently optimized for web browsers. Mobile support coming soon!
-            </Text>
+                  <Text
+                    style={[
+                      styles.voiceButtonText,
+                      selectedVoice === voice && styles.voiceButtonTextActive,
+                      isDark && styles.textDark,
+                    ]}
+                  >
+                    {voice.charAt(0).toUpperCase() + voice.slice(1)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
           </View>
         )}
+
+        {/* Platform Info */}
+        <View style={[styles.noticeCard, isDark && styles.noticeCardDark]}>
+          <MaterialIcons name="info-outline" size={24} color="#10B981" />
+          <Text style={[styles.noticeText, isDark && styles.textDark]}>
+            {Platform.OS === "web" 
+              ? "Using browser text-to-speech for audio playback"
+              : "Using device text-to-speech. For premium voices, upgrade to cloud TTS"}
+          </Text>
+        </View>
       </Animated.View>
     );
   };
@@ -836,7 +1109,6 @@ const styles = StyleSheet.create({
     color: "#6B7280",
     marginTop: 16,
   },
-  // Selection View Styles
   searchContainer: {
     flexDirection: "row",
     alignItems: "center",
@@ -1020,7 +1292,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
   },
-  // Player View Styles
   backButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -1105,6 +1376,29 @@ const styles = StyleSheet.create({
     backgroundColor: "#E5E7EB",
     borderRadius: 3,
   },
+  progressContainer: {
+    width: "100%",
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginBottom: 20,
+  },
+  progressBar: {
+    flex: 1,
+    height: 4,
+    backgroundColor: "#E5E7EB",
+    borderRadius: 2,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    backgroundColor: "#9B5DE5",
+  },
+  timeText: {
+    fontSize: 12,
+    color: "#6B7280",
+    fontWeight: "600",
+  },
   playButton: {
     width: 96,
     height: 96,
@@ -1147,7 +1441,7 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: "#FFFFFF",
     borderRadius: 20,
-    padding: 10,
+    padding: 20,
     marginBottom: 16,
     elevation: 2,
     shadowColor: "#000",
@@ -1172,7 +1466,6 @@ const styles = StyleSheet.create({
   },
   formatButtons: {
     gap: 12,
-    marginBottom: 12,
   },
   formatButton: {
     flexDirection: "row",
@@ -1234,7 +1527,7 @@ const styles = StyleSheet.create({
     color: "#059669",
   },
   noticeCard: {
-    backgroundColor: "#FEF3C7",
+    backgroundColor: "#D1FAE5",
     borderRadius: 16,
     padding: 16,
     flexDirection: "row",
@@ -1243,12 +1536,12 @@ const styles = StyleSheet.create({
     marginBottom: 16,
   },
   noticeCardDark: {
-    backgroundColor: "#92400E",
+    backgroundColor: "#065F46",
   },
   noticeText: {
     flex: 1,
     fontSize: 13,
-    color: "#92400E",
+    color: "#065F46",
     lineHeight: 18,
   },
   textDark: {

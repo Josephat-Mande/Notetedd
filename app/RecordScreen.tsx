@@ -483,10 +483,10 @@ export default function RecordScreen({ route }) {
   // ==================== ASSEMBLYAI TRANSCRIPTION ====================
   const transcribeWithAssemblyAI = async (uri) => {
     try {
-      console.log("🎯 Starting AssemblyAI transcription...");
+      console.log("🎯 Starting AI transcription...");
 
       if (!ASSEMBLYAI_API_KEY || ASSEMBLYAI_API_KEY.length < 10) {
-        throw new Error("AssemblyAI API key not configured.");
+        throw new Error("AI API key not configured.");
       }
 
       let blob;
