@@ -13,9 +13,10 @@ import {
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import haptics from "./utils/haptics";
+import { useTheme } from "./context/ThemeContext";
 
 export default function HelpSupportScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
   
   const [searchQuery, setSearchQuery] = useState("");

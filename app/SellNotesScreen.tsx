@@ -13,6 +13,7 @@ import {
   ScrollView
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useTheme } from './context/ThemeContext';
 import { 
   getFirestore, 
   collection, 
@@ -41,6 +42,7 @@ export default function SellNotesScreen() {
   const [showPriceModal, setShowPriceModal] = useState(false);
   const [totalPrice, setTotalPrice] = useState(0);
   const [sessionListener, setSessionListener] = useState(null);
+  const { theme, colors } = useTheme();
 
   const db = getFirestore();
   const auth = getAuth();
@@ -541,9 +543,9 @@ export default function SellNotesScreen() {
   // Loading State
   if (loading && notes.length === 0 && mode === 'selection') {
     return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#7c3aed" />
-        <Text style={styles.loadingText}>Loading your notes...</Text>
+      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.subtext }]}>Loading your notes...</Text>
       </View>
     );
   }
@@ -551,13 +553,11 @@ export default function SellNotesScreen() {
   // Selection Mode
   if (mode === 'selection') {
     return (
-      <View style={styles.container}>
+      <View style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={styles.header}>
-          <MaterialIcons name="share" size={32} color="#7c3aed" />
-          <Text style={styles.headerTitle}>Share Notes</Text>
-          <Text style={styles.headerSubtitle}>
-            Select notes to share and earn money
-          </Text>
+          <MaterialIcons name="share" size={32} color={colors.primary} />
+          <Text style={[styles.headerTitle, { color: colors.text }]}>Share Notes</Text>
+          <Text style={[styles.headerSubtitle, { color: colors.subtext }]}>Select notes to share and earn money</Text>
         </View>
 
         <View style={styles.actionButtons}>
@@ -575,8 +575,8 @@ export default function SellNotesScreen() {
             style={[styles.actionButton, styles.receiveButton]}
             onPress={() => setMode('receive')}
           >
-            <MaterialIcons name="input" size={20} color="#7c3aed" />
-            <Text style={[styles.actionButtonText, { color: '#7c3aed' }]}>
+            <MaterialIcons name="input" size={20} color={colors.primary} />
+            <Text style={[styles.actionButtonText, { color: colors.primary }]}>
               Receive Notes
             </Text>
           </TouchableOpacity>
@@ -589,11 +589,9 @@ export default function SellNotesScreen() {
           contentContainerStyle={styles.notesList}
           ListEmptyComponent={
             <View style={styles.emptyContainer}>
-              <MaterialIcons name="note" size={64} color="#d1d5db" />
-              <Text style={styles.emptyText}>No notes available to share</Text>
-              <Text style={styles.emptySubtext}>
-                Record and organize lectures first to share them
-              </Text>
+              <MaterialIcons name="note" size={64} color={colors.border} />
+              <Text style={[styles.emptyText, { color: colors.subtext }]}>No notes available to share</Text>
+              <Text style={[styles.emptySubtext, { color: colors.subtext }]}>Record and organize lectures first to share them</Text>
             </View>
           }
         />
@@ -607,7 +605,7 @@ export default function SellNotesScreen() {
         >
           <View style={styles.modalOverlay}>
             <View style={styles.modalContent}>
-              <MaterialIcons name="attach-money" size={48} color="#7c3aed" />
+              <MaterialIcons name="attach-money" size={48} color={colors.primary} />
               <Text style={styles.modalTitle}>Confirm Share</Text>
               <Text style={styles.modalText}>
                 You're about to share {selectedNotes.length} note{selectedNotes.length > 1 ? 's' : ''}
@@ -616,7 +614,7 @@ export default function SellNotesScreen() {
                 <Text style={styles.priceDisplayLabel}>Total Value:</Text>
                 <Text style={styles.priceDisplayAmount}>KES {totalPrice}</Text>
               </View>
-              <Text style={styles.modalInfo}>
+              <Text style={[styles.modalInfo, { color: colors.subtext }] }>
                 The receiver will see this price when they connect
               </Text>
               <View style={styles.modalButtons}>
@@ -645,9 +643,9 @@ export default function SellNotesScreen() {
   // Share Mode - Showing Code
   if (mode === 'share') {
     return (
-      <View style={styles.container}>
+        <View style={[styles.container, { backgroundColor: colors.background }] }>
         <TouchableOpacity style={styles.backButton} onPress={cancelShareSession}>
-          <MaterialIcons name="close" size={24} color="#ef4444" />
+          <MaterialIcons name="close" size={24} color={colors.error} />
           <Text style={styles.cancelText}>Cancel</Text>
         </TouchableOpacity>
 
@@ -656,12 +654,10 @@ export default function SellNotesScreen() {
             {connectionStatus === 'waiting' && (
               <>
                 <View style={styles.pulseContainer}>
-                  <ActivityIndicator size="large" color="#7c3aed" />
+                  <ActivityIndicator size="large" color={colors.primary} />
                 </View>
-                <Text style={styles.statusTitle}>Waiting for Connection</Text>
-                <Text style={styles.statusSubtitle}>
-                  Share this code with the receiver
-                </Text>
+                <Text style={[styles.statusTitle, { color: colors.text }]}>Waiting for Connection</Text>
+                <Text style={[styles.statusSubtitle, { color: colors.subtext }]}>Share this code with the receiver</Text>
                 
                 <View style={styles.codeDisplay}>
                   <Text style={styles.codeText}>{shareCode}</Text>
@@ -669,15 +665,15 @@ export default function SellNotesScreen() {
                 
                 <View style={styles.shareInfoContainer}>
                   <View style={styles.shareInfoRow}>
-                    <MaterialIcons name="description" size={20} color="#6b7280" />
-                    <Text style={styles.shareInfo}>
-                      {selectedNotes.length} note{selectedNotes.length > 1 ? 's' : ''}
-                    </Text>
-                  </View>
-                  <View style={styles.shareInfoRow}>
-                    <MaterialIcons name="attach-money" size={20} color="#15803d" />
-                    <Text style={styles.sharePrice}>KES {totalPrice}</Text>
-                  </View>
+                      <MaterialIcons name="description" size={20} color={colors.subtext} />
+                      <Text style={[styles.shareInfo, { color: colors.subtext }]}>
+                        {selectedNotes.length} note{selectedNotes.length > 1 ? 's' : ''}
+                      </Text>
+                    </View>
+                    <View style={styles.shareInfoRow}>
+                      <MaterialIcons name="attach-money" size={20} color={colors.success} />
+                      <Text style={[styles.sharePrice, { color: colors.text }]}>KES {totalPrice}</Text>
+                    </View>
                 </View>
 
                 <Text style={styles.expiryText}>

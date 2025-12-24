@@ -23,6 +23,7 @@ import haptics from "./utils/haptics";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { getFirestore, collection, addDoc, serverTimestamp, query, where, orderBy, limit, getDocs, doc, updateDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { useTheme } from "./context/ThemeContext";
 
 const { width } = Dimensions.get("window");
 
@@ -66,7 +67,7 @@ const SUPPORTED_LANGUAGES = [
 ];
 
 export default function RecordScreen({ route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
   const navigation = useNavigation();
   

@@ -4,6 +4,7 @@ import { View, TouchableOpacity, Text, StyleSheet, Animated } from "react-native
 import { useRouter, usePathname } from "expo-router";
 import MaterialCommunityIcons from "react-native-vector-icons/MaterialCommunityIcons";
 import { LinearGradient } from "expo-linear-gradient";
+import ThemeProvider from "./context/ThemeContext";
 import { Stack } from "expo-router";
 
 export default function Layout() {
@@ -68,7 +69,8 @@ export default function Layout() {
   const shouldShowNav = !hiddenPaths.includes(pathname);
 
   return (
-    <View style={{ flex: 1, backgroundColor: "#F9FAFB" }}>
+    <ThemeProvider>
+      <View style={{ flex: 1, backgroundColor: "#F9FAFB" }}>
       {/* FIX: Use Stack instead of Slot for proper navigation */}
       <Stack
         screenOptions={{
@@ -263,7 +265,8 @@ export default function Layout() {
           </View>
         </View>
       )}
-    </View>
+      </View>
+    </ThemeProvider>
   );
 }
 

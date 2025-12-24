@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { useTheme } from "./context/ThemeContext";
 import { 
   View, 
   Text, 
@@ -24,7 +25,7 @@ const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemini-pro:generateContent";
 
 export default function QuizScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
 
   const [quizSessions, setQuizSessions] = useState([]);

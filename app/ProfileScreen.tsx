@@ -10,24 +10,39 @@ import {
   Animated,
   Alert,
   Platform,
+  ActivityIndicator,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import { getAuth, updateProfile } from "firebase/auth";
-import { getFirestore, doc, getDoc, updateDoc } from "firebase/firestore";
+import { 
+  getFirestore, 
+  doc, 
+  getDoc, 
+  updateDoc,
+  collection,
+  query,
+  where,
+  getDocs,
+  orderBy,
+  limit
+} from "firebase/firestore";
 import * as ImagePicker from "expo-image-picker";
 import haptics from "./utils/haptics";
 import BackButton from "../components/Backbutton";
+import { useTheme } from "./context/ThemeContext";
 
 export default function ProfileScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
   
   const goBack = () => {
-    navigation.navigate("PreviousScreen");
-  }
+    navigation.goBack();
+  };
+
   const [isEditing, setIsEditing] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [statsLoading, setStatsLoading] = useState(true);
   const [profileData, setProfileData] = useState({
     displayName: "",
     email: "",
@@ -36,15 +51,20 @@ export default function ProfileScreen({ navigation, route }) {
     university: "",
     major: "",
     yearOfStudy: "",
+    dateOfBirth: "",
     photoURL: null,
+    semesterUnits: [],
   });
   
   const [stats, setStats] = useState({
-    lecturesRecorded: 45,
-    notesCreated: 128,
-    quizzesCompleted: 32,
-    studyHours: 156,
+    lecturesRecorded: 0,
+    notesCreated: 0,
+    quizzesCompleted: 0,
+    studyHours: 0,
   });
+
+  const [newUnit, setNewUnit] = useState("");
+  const [showAddUnit, setShowAddUnit] = useState(false);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
@@ -53,6 +73,7 @@ export default function ProfileScreen({ navigation, route }) {
 
   useEffect(() => {
     loadProfileData();
+    loadRealTimeStats();
     
     Animated.parallel([
       Animated.timing(fadeAnim, {
@@ -84,18 +105,74 @@ export default function ProfileScreen({ navigation, route }) {
             university: data.university || "",
             major: data.major || "",
             yearOfStudy: data.yearOfStudy || "",
+            dateOfBirth: data.dateOfBirth || "",
             photoURL: user.photoURL || data.photoURL || null,
-          });
-          setStats({
-            lecturesRecorded: data.lecturesRecorded || 45,
-            notesCreated: data.notesCreated || 128,
-            quizzesCompleted: data.quizzesCompleted || 32,
-            studyHours: data.studyHours || 156,
+            semesterUnits: data.semesterUnits || [],
           });
         }
       } catch (error) {
         console.error("Error loading profile:", error);
+        Alert.alert("Error", "Failed to load profile data");
       }
+    }
+  };
+
+  const loadRealTimeStats = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      setStatsLoading(true);
+
+      // Fetch lectures count
+      const lecturesQuery = query(
+        collection(db, "lectures"),
+        where("userId", "==", user.uid)
+      );
+      const lecturesSnap = await getDocs(lecturesQuery);
+      const lecturesCount = lecturesSnap.size;
+
+      // Fetch notes count
+      const notesQuery = query(
+        collection(db, "notes"),
+        where("userId", "==", user.uid)
+      );
+      const notesSnap = await getDocs(notesQuery);
+      const notesCount = notesSnap.size;
+
+      // Fetch quizzes count
+      const quizzesQuery = query(
+        collection(db, "quizzes"),
+        where("userId", "==", user.uid),
+        where("completed", "==", true)
+      );
+      const quizzesSnap = await getDocs(quizzesQuery);
+      const quizzesCount = quizzesSnap.size;
+
+      // Calculate total study hours from lectures
+      let totalHours = 0;
+      lecturesSnap.forEach((doc) => {
+        const data = doc.data();
+        if (data.duration) {
+          totalHours += parseFloat(data.duration) || 0;
+        }
+      });
+
+      // Round to nearest integer
+      totalHours = Math.round(totalHours);
+
+      setStats({
+        lecturesRecorded: lecturesCount,
+        notesCreated: notesCount,
+        quizzesCompleted: quizzesCount,
+        studyHours: totalHours,
+      });
+
+    } catch (error) {
+      console.error("Error loading stats:", error);
+      Alert.alert("Error", "Failed to load statistics");
+    } finally {
+      setStatsLoading(false);
     }
   };
 
@@ -106,11 +183,13 @@ export default function ProfileScreen({ navigation, route }) {
     try {
       const user = auth.currentUser;
       if (user) {
+        // Update Firebase Auth profile
         await updateProfile(user, {
           displayName: profileData.displayName,
           photoURL: profileData.photoURL,
         });
 
+        // Update Firestore user document
         await updateDoc(doc(db, "users", user.uid), {
           username: profileData.displayName,
           phone: profileData.phone,
@@ -118,6 +197,10 @@ export default function ProfileScreen({ navigation, route }) {
           university: profileData.university,
           major: profileData.major,
           yearOfStudy: profileData.yearOfStudy,
+          dateOfBirth: profileData.dateOfBirth,
+          semesterUnits: profileData.semesterUnits,
+          photoURL: profileData.photoURL,
+          updatedAt: new Date().toISOString(),
         });
 
         await haptics.notification("Success");
@@ -125,6 +208,7 @@ export default function ProfileScreen({ navigation, route }) {
         setIsEditing(false);
       }
     } catch (error) {
+      console.error("Error updating profile:", error);
       await haptics.notification("Error");
       Alert.alert("Error", "Failed to update profile. Please try again.");
     } finally {
@@ -153,6 +237,43 @@ export default function ProfileScreen({ navigation, route }) {
     }
   };
 
+  const handleAddUnit = async () => {
+    await haptics.impact("Light");
+    
+    if (newUnit.trim() && profileData.semesterUnits.length < 10) {
+      setProfileData({
+        ...profileData,
+        semesterUnits: [...profileData.semesterUnits, newUnit.trim()],
+      });
+      setNewUnit("");
+      setShowAddUnit(false);
+    } else if (profileData.semesterUnits.length >= 10) {
+      Alert.alert("Limit Reached", "You can only add up to 10 units");
+    }
+  };
+
+  const handleRemoveUnit = async (index) => {
+    await haptics.impact("Light");
+    
+    Alert.alert(
+      "Remove Unit",
+      "Are you sure you want to remove this unit?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => {
+            setProfileData({
+              ...profileData,
+              semesterUnits: profileData.semesterUnits.filter((_, i) => i !== index),
+            });
+          },
+        },
+      ]
+    );
+  };
+
   const getInitials = () => {
     const name = profileData.displayName || "U";
     const parts = name.split(" ");
@@ -169,7 +290,7 @@ export default function ProfileScreen({ navigation, route }) {
         colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
         style={styles.header}
       >
-        <BackButton />
+        <BackButton onPress={goBack} />
         
         <Text style={styles.headerTitle}>My Profile</Text>
         
@@ -177,6 +298,10 @@ export default function ProfileScreen({ navigation, route }) {
           style={styles.editButton}
           onPress={() => {
             haptics.impact("Light");
+            if (isEditing) {
+              setShowAddUnit(false);
+              setNewUnit("");
+            }
             setIsEditing(!isEditing);
           }}
         >
@@ -241,25 +366,36 @@ export default function ProfileScreen({ navigation, route }) {
           {/* Stats Cards */}
           {!isEditing && (
             <View style={styles.statsContainer}>
-              {[
-                { icon: "mic", label: "Lectures", value: stats.lecturesRecorded, color: "#9B5DE5" },
-                { icon: "note", label: "Notes", value: stats.notesCreated, color: "#10B981" },
-                { icon: "quiz", label: "Quizzes", value: stats.quizzesCompleted, color: "#F59E0B" },
-                { icon: "schedule", label: "Hours", value: stats.studyHours, color: "#EF4444" },
-              ].map((stat, index) => (
-                <View 
-                  key={index}
-                  style={[styles.statCard, isDark && styles.statCardDark]}
-                >
-                  <View style={[styles.statIcon, { backgroundColor: stat.color + "20" }]}>
-                    <MaterialIcons name={stat.icon} size={24} color={stat.color} />
-                  </View>
-                  <Text style={[styles.statValue, isDark && styles.textDark]}>
-                    {stat.value}
+              {statsLoading ? (
+                <View style={styles.statsLoadingContainer}>
+                  <ActivityIndicator size="large" color="#9B5DE5" />
+                  <Text style={[styles.loadingText, isDark && styles.textDark]}>
+                    Loading stats...
                   </Text>
-                  <Text style={styles.statLabel}>{stat.label}</Text>
                 </View>
-              ))}
+              ) : (
+                <>
+                  {[
+                    { icon: "mic", label: "Lectures", value: stats.lecturesRecorded, color: "#9B5DE5" },
+                    { icon: "note", label: "Notes", value: stats.notesCreated, color: "#10B981" },
+                    { icon: "quiz", label: "Quizzes", value: stats.quizzesCompleted, color: "#F59E0B" },
+                    { icon: "schedule", label: "Hours", value: stats.studyHours, color: "#EF4444" },
+                  ].map((stat, index) => (
+                    <View 
+                      key={index}
+                      style={[styles.statCard, isDark && styles.statCardDark]}
+                    >
+                      <View style={[styles.statIcon, { backgroundColor: stat.color + "20" }]}>
+                        <MaterialIcons name={stat.icon} size={24} color={stat.color} />
+                      </View>
+                      <Text style={[styles.statValue, isDark && styles.textDark]}>
+                        {stat.value}
+                      </Text>
+                      <Text style={styles.statLabel}>{stat.label}</Text>
+                    </View>
+                  ))}
+                </>
+              )}
             </View>
           )}
 
@@ -269,6 +405,7 @@ export default function ProfileScreen({ navigation, route }) {
               Personal Information
             </Text>
 
+            {/* Full Name */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 Full Name
@@ -292,6 +429,7 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             </View>
 
+            {/* Email */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 Email Address
@@ -313,6 +451,7 @@ export default function ProfileScreen({ navigation, route }) {
               <Text style={styles.helperText}>Email cannot be changed</Text>
             </View>
 
+            {/* Phone */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 Phone Number
@@ -337,6 +476,32 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             </View>
 
+            {/* Date of Birth */}
+            <View style={styles.inputGroup}>
+              <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                Date of Birth
+              </Text>
+              <View style={[styles.inputContainer, isDark && styles.inputContainerDark]}>
+                <MaterialIcons 
+                  name="cake" 
+                  size={20} 
+                  color={isDark ? "#9CA3AF" : "#6B7280"} 
+                />
+                <TextInput
+                  style={[styles.input, isDark && styles.inputDark]}
+                  value={profileData.dateOfBirth}
+                  onChangeText={(text) => 
+                    setProfileData({ ...profileData, dateOfBirth: text })
+                  }
+                  editable={isEditing}
+                  placeholder="YYYY-MM-DD"
+                  placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                />
+              </View>
+              <Text style={styles.helperText}>Format: YYYY-MM-DD</Text>
+            </View>
+
+            {/* Bio */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 Bio
@@ -361,10 +526,12 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             </View>
 
+            {/* Academic Information Section */}
             <Text style={[styles.sectionTitle, isDark && styles.textDark, { marginTop: 24 }]}>
               Academic Information
             </Text>
 
+            {/* University */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 University
@@ -388,6 +555,7 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             </View>
 
+            {/* Major */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 Major / Field of Study
@@ -411,6 +579,7 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             </View>
 
+            {/* Year of Study */}
             <View style={styles.inputGroup}>
               <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
                 Year of Study
@@ -434,6 +603,104 @@ export default function ProfileScreen({ navigation, route }) {
               </View>
             </View>
 
+            {/* Semester Units */}
+            <View style={styles.inputGroup}>
+              <View style={styles.unitHeaderRow}>
+                <Text style={[styles.inputLabel, isDark && styles.textSecondaryDark]}>
+                  Semester Units ({profileData.semesterUnits.length}/10)
+                </Text>
+                {isEditing && profileData.semesterUnits.length < 10 && (
+                  <TouchableOpacity
+                    onPress={() => {
+                      haptics.impact("Light");
+                      setShowAddUnit(true);
+                    }}
+                    style={styles.addUnitButton}
+                  >
+                    <MaterialIcons name="add-circle" size={20} color="#9B5DE5" />
+                    <Text style={styles.addUnitText}>Add Unit</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+
+              {showAddUnit && (
+                <View style={styles.addUnitContainer}>
+                  <View style={[styles.inputContainer, isDark && styles.inputContainerDark, { flex: 1 }]}>
+                    <TextInput
+                      style={[styles.input, isDark && styles.inputDark]}
+                      value={newUnit}
+                      onChangeText={setNewUnit}
+                      placeholder="e.g., CS301 - Data Structures"
+                      placeholderTextColor={isDark ? "#6B7280" : "#9CA3AF"}
+                      onSubmitEditing={handleAddUnit}
+                    />
+                  </View>
+                  <TouchableOpacity
+                    onPress={handleAddUnit}
+                    style={styles.addButton}
+                  >
+                    <LinearGradient
+                      colors={["#9B5DE5", "#7C3AED"]}
+                      style={styles.addButtonGradient}
+                    >
+                      <MaterialIcons name="check" size={20} color="#fff" />
+                    </LinearGradient>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() => {
+                      setShowAddUnit(false);
+                      setNewUnit("");
+                    }}
+                    style={styles.cancelButton}
+                  >
+                    <MaterialIcons name="close" size={20} color="#6B7280" />
+                  </TouchableOpacity>
+                </View>
+              )}
+
+              <View style={styles.unitsListContainer}>
+                {profileData.semesterUnits.length === 0 ? (
+                  <View style={[styles.emptyUnitsContainer, isDark && styles.emptyUnitsContainerDark]}>
+                    <MaterialIcons 
+                      name="info-outline" 
+                      size={24} 
+                      color={isDark ? "#6B7280" : "#9CA3AF"} 
+                    />
+                    <Text style={[styles.emptyUnitsText, isDark && styles.textSecondaryDark]}>
+                      No units added yet
+                    </Text>
+                  </View>
+                ) : (
+                  profileData.semesterUnits.map((unit, index) => (
+                    <View
+                      key={index}
+                      style={[styles.unitItem, isDark && styles.unitItemDark]}
+                    >
+                      <View style={styles.unitItemContent}>
+                        <MaterialIcons 
+                          name="menu-book" 
+                          size={20} 
+                          color="#9B5DE5" 
+                        />
+                        <Text style={[styles.unitItemText, isDark && styles.textDark]}>
+                          {unit}
+                        </Text>
+                      </View>
+                      {isEditing && (
+                        <TouchableOpacity
+                          onPress={() => handleRemoveUnit(index)}
+                          style={styles.removeUnitButton}
+                        >
+                          <MaterialIcons name="delete" size={20} color="#EF4444" />
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ))
+                )}
+              </View>
+            </View>
+
+            {/* Save Button */}
             {isEditing && (
               <TouchableOpacity
                 style={styles.saveButton}
@@ -444,10 +711,14 @@ export default function ProfileScreen({ navigation, route }) {
                   colors={["#10B981", "#059669"]}
                   style={styles.saveButtonGradient}
                 >
-                  <MaterialIcons name="check" size={24} color="#fff" />
-                  <Text style={styles.saveButtonText}>
-                    {loading ? "Saving..." : "Save Changes"}
-                  </Text>
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <MaterialIcons name="check" size={24} color="#fff" />
+                      <Text style={styles.saveButtonText}>Save Changes</Text>
+                    </>
+                  )}
                 </LinearGradient>
               </TouchableOpacity>
             )}
@@ -473,14 +744,6 @@ const styles = StyleSheet.create({
     paddingTop: 60,
     paddingBottom: 20,
     paddingHorizontal: 20,
-  },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: "rgba(255,255,255,0.2)",
-    justifyContent: "center",
-    alignItems: "center",
   },
   headerTitle: {
     fontSize: 20,
@@ -551,6 +814,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginBottom: 24,
     gap: 12,
+  },
+  statsLoadingContainer: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 40,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: "#6B7280",
   },
   statCard: {
     flex: 1,
@@ -656,6 +930,100 @@ const styles = StyleSheet.create({
     color: "#9CA3AF",
     marginTop: 4,
     marginLeft: 4,
+  },
+  unitHeaderRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 12,
+  },
+  addUnitButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  addUnitText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#9B5DE5",
+  },
+  addUnitContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    marginBottom: 12,
+  },
+  addButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    overflow: "hidden",
+  },
+  addButtonGradient: {
+    width: "100%",
+    height: "100%",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  cancelButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#F3F4F6",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  unitsListContainer: {
+    gap: 8,
+  },
+  emptyUnitsContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    paddingVertical: 24,
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+    borderStyle: "dashed",
+  },
+  emptyUnitsContainerDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
+  },
+  emptyUnitsText: {
+    fontSize: 14,
+    color: "#9CA3AF",
+  },
+  unitItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    backgroundColor: "#F9FAFB",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderWidth: 1,
+    borderColor: "#E5E7EB",
+  },
+  unitItemDark: {
+    backgroundColor: "#374151",
+    borderColor: "#4B5563",
+  },
+  unitItemContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    flex: 1,
+  },
+  unitItemText: {
+    fontSize: 15,
+    color: "#1F2937",
+    flex: 1,
+  },
+  removeUnitButton: {
+    padding: 4,
   },
   saveButton: {
     marginTop: 24,

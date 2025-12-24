@@ -15,6 +15,7 @@ import {
   StatusBar,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { useTheme } from "./context/ThemeContext";
 import { auth } from "../firebaseConfig";
 import { sendPasswordResetEmail } from "firebase/auth";
 import Toast, { showToast } from "../toastConfig";
@@ -27,6 +28,7 @@ export default function ResetPasswordScreen() {
   const [emailSent, setEmailSent] = useState(false);
   const [focusedInput, setFocusedInput] = useState(null);
   const router = useRouter();
+  const { theme, colors } = useTheme();
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -228,7 +230,11 @@ export default function ResetPasswordScreen() {
 
   return (
     <View style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+      <StatusBar
+        barStyle={theme === 'dark' ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.background}
+        translucent
+      />
       
       {/* Animated Background Gradient */}
       <LinearGradient

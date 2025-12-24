@@ -17,6 +17,7 @@ import {
   SafeAreaView,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
+import { useTheme } from "./context/ThemeContext";
 import { auth, db } from "../firebaseConfig";
 import { 
   createUserWithEmailAndPassword, 
@@ -39,6 +40,8 @@ export default function AuthScreen() {
   const [isLoading, setIsLoading] = useState(false);
   const [focusedInput, setFocusedInput] = useState(null);
   const router = useRouter();
+
+  const { theme, colors } = useTheme();
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -329,9 +332,9 @@ export default function AuthScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <StatusBar 
-          barStyle="light-content" 
-          backgroundColor="#e67e22" 
+        <StatusBar
+          barStyle={theme === 'dark' ? 'light-content' : 'dark-content'}
+          backgroundColor={colors.background}
           translucent={false}
         />
         

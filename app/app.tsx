@@ -7,10 +7,9 @@ import { View, Text, Platform } from "react-native";
 
 import { createStackNavigator } from '@react-navigation/stack';
 import { NavigationContainer } from '@react-navigation/native';
-
+import { StatusBar } from 'react-native';
 
 import HomeScreen from './HomeScreen';
-
 import ProfileScreen from './ProfileScreen';
 import RecordScreen from "./RecordScreen";
 import NotesScreen from "./NotesScreen";
@@ -19,7 +18,6 @@ import SellNotesScreen from "./SellNotesScreen";
 import SyncClassroomScreen from "./SyncClassroomScreen";
 import PrivacyScreen from "./PrivacyScreen";
 import UploadPDFScreen from "./UploadPDFScreen";
-import Sidebar from "./Sidebar";
 import HelpSupportScreen from "./HelpSupportScreen";
 import PrefferencesScreen from "./PrefferencesScreen";
 import DarkModeScreen from "./DarkModeScreen";
@@ -28,11 +26,10 @@ import PaymentMethodsScreen from "./PaymentMethodsScreen";
 import SubscriptionPlanScreen from "./SubscriptionPlanScreen";
 import ResetPasswordScreen from "./ResetPasswordScreen";
 
+import ThemeProvider, { useTheme } from "./context/ThemeContext";
+
 import { LogBox } from 'react-native';
 LogBox.ignoreAllLogs(); // optional
-
-
-
 
 // ==================== ERROR BOUNDARY ====================
 interface ErrorBoundaryState {
@@ -71,7 +68,7 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
             {this.state.errorMessage}
           </Text>
           <Text style={{ fontSize: 12, color: '#999', textAlign: 'center' }}>
-            Please restart the app or contact support. Email :notetedd@gmail.com
+            Please restart the app or contact support. Email: notetedd@gmail.com
           </Text>
         </View>
       );
@@ -82,22 +79,37 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 }
 
 // ==================== GLOBAL ERROR HANDLER ====================
-const originalErrorHandler = ErrorUtils.getGlobalHandler?.();
-ErrorUtils.setGlobalHandler((error, isFatal) => {
-  console.error('Global error:', error, 'isFatal:', isFatal);
-  // Still call original handler if it exists
-  if (originalErrorHandler) {
-    originalErrorHandler(error, isFatal);
-  }
-});
+if (typeof ErrorUtils !== 'undefined') {
+  const originalErrorHandler = ErrorUtils.getGlobalHandler?.();
+  ErrorUtils.setGlobalHandler((error, isFatal) => {
+    console.error('Global error:', error, 'isFatal:', isFatal);
+    // Still call original handler if it exists
+    if (originalErrorHandler) {
+      originalErrorHandler(error, isFatal);
+    }
+  });
+}
 
-const Stack = createStackNavigator<RootStackParamList>();
+const Stack = createStackNavigator();
 
+// ==================== MAIN APP ====================
 export default function App() {
+  return (
+    <ErrorBoundary>
+      <ThemeProvider>
+        <AppContent />
+      </ThemeProvider>
+    </ErrorBoundary>
+  );
+}
+
+// ==================== APP CONTENT ====================
+function AppContent() {
+  
+  const { theme, colors } = useTheme();
 
   useEffect(() => {
     if (Platform.OS === 'web') {
-      // Register service worker
       if ('serviceWorker' in navigator) {
         navigator.serviceWorker
           .register('/service-worker.js')
@@ -111,35 +123,121 @@ export default function App() {
     }
   }, []);
 
-  
-  
   return (
-    <ErrorBoundary>
-      <NavigationContainer>
-        <Slot />
-        <Toast /> {/* Toast message */}
-        <Stack.Navigator initialRouteName="HomeScreen">
-          <Stack.Screen name="HomeScreen" component={HomeScreen} />
-          <Stack.Screen name="RecordScreen" component={RecordScreen} />
-          <Stack.Screen name="NotesScreen" component={NotesScreen} />
-          <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
-          <Stack.Screen name="PairedDevicesScreen" component={PairedDevicesScreen} />
-          <Stack.Screen name="SubscriptionPlanScreen" component={SubscriptionPlanScreen} />
-          <Stack.Screen name="PaymentMethodsScreen" component={PaymentMethodsScreen} />
-          <Stack.Screen name="NotificationsScreen" component={NotificationsScreen} />
-          <Stack.Screen name="HelpSupportScreen" component={HelpSupportScreen} />
-          <Stack.Screen name="SellNotesScreen" component={SellNotesScreen} />
-          <Stack.Screen name="SyncClassroomScreen" component={SyncClassroomScreen} />
-          <Stack.Screen name="PrivacyScreen" component={PrivacyScreen} />
-          <Stack.Screen name="UploadPDFScreen" component={UploadPDFScreen} />
-          <Stack.Screen name="PrefferencesScreen" component={PrefferencesScreen} />
-          <Stack.Screen name="DarkModeScreen" component={DarkModeScreen} />
-          <Stack.Screen name="ResetPasswordScreen" component={ResetPasswordScreen} />
-          <Stack.Screen name="Sidebar" component={Sidebar} />
+    <>
+      <StatusBar
+        barStyle={theme === 'dark' ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.background}
+      />
+      <NavigationContainer
+        theme={{
+          dark: theme === 'dark',
+          colors: {
+            primary: colors.primary,
+            background: colors.background,
+            card: colors.card,
+            text: colors.text,
+            border: colors.border,
+            notification: colors.error,
+          },
+        }}
+      >
+        <Stack.Navigator 
+          initialRouteName="HomeScreen"
+          screenOptions={{
+            headerStyle: {
+              backgroundColor: colors.surface || colors.card,
+            },
+            headerTintColor: colors.text,
+            headerTitleStyle: {
+              fontWeight: 'bold',
+            },
+          }}
+        >
+          <Stack.Screen 
+            name="HomeScreen" 
+            component={HomeScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen 
+            name="RecordScreen" 
+            component={RecordScreen}
+            options={{ title: 'Record' }}
+          />
+          <Stack.Screen 
+            name="NotesScreen" 
+            component={NotesScreen}
+            options={{ title: 'Notes' }}
+          />
+          <Stack.Screen 
+            name="ProfileScreen" 
+            component={ProfileScreen}
+            options={{ title: 'Profile' }}
+          />
+          <Stack.Screen 
+            name="PairedDevicesScreen" 
+            component={PairedDevicesScreen}
+            options={{ title: 'Paired Devices' }}
+          />
+          <Stack.Screen 
+            name="SubscriptionPlanScreen" 
+            component={SubscriptionPlanScreen}
+            options={{ title: 'Subscription' }}
+          />
+          <Stack.Screen 
+            name="PaymentMethodsScreen" 
+            component={PaymentMethodsScreen}
+            options={{ title: 'Payment Methods' }}
+          />
+          <Stack.Screen 
+            name="NotificationsScreen" 
+            component={NotificationsScreen}
+            options={{ title: 'Notifications' }}
+          />
+          <Stack.Screen 
+            name="HelpSupportScreen" 
+            component={HelpSupportScreen}
+            options={{ title: 'Help & Support' }}
+          />
+          <Stack.Screen 
+            name="SellNotesScreen" 
+            component={SellNotesScreen}
+            options={{ title: 'Sell Notes' }}
+          />
+          <Stack.Screen 
+            name="SyncClassroomScreen" 
+            component={SyncClassroomScreen}
+            options={{ title: 'Sync Classroom' }}
+          />
+          <Stack.Screen 
+            name="PrivacyScreen" 
+            component={PrivacyScreen}
+            options={{ title: 'Privacy' }}
+          />
+          <Stack.Screen 
+            name="UploadPDFScreen" 
+            component={UploadPDFScreen}
+            options={{ title: 'Upload PDF' }}
+          />
+          <Stack.Screen 
+            name="PrefferencesScreen" 
+            component={PrefferencesScreen}
+            options={{ title: 'Preferences' }}
+          />
+          <Stack.Screen 
+            name="DarkModeScreen" 
+            component={DarkModeScreen}
+            options={{ title: 'Dark Mode' }}
+          />
+          <Stack.Screen 
+            name="ResetPasswordScreen" 
+            component={ResetPasswordScreen}
+            options={{ title: 'Reset Password' }}
+          />
+          
         </Stack.Navigator>
+        <Toast />
       </NavigationContainer>
-    </ErrorBoundary>
+    </>
   );
-
-  
 }

@@ -10,74 +10,119 @@ import {
   ScrollView,
   Switch,
   Alert,
+  Platform,
 } from "react-native";
 import {
   User,
-  Download,
   Laptop2,
-  Printer,
-  Upload,
-  CreditCard,
-  Star,
-  Settings,
+  Bell,
+  Shield,
   HelpCircle,
   LogOut,
-  Bell,
   Moon,
-  Shield,
   Sun,
   ChevronRight,
   School,
+  Star,
+  CreditCard,
+  FileUp,
+  DollarSign,
 } from "lucide-react-native";
-import { useNavigation } from "@react-navigation/native";
 import { getAuth, onAuthStateChanged, signOut } from "firebase/auth";
 import { getFirestore, doc, getDoc } from "firebase/firestore";
 import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
-import haptics from "./utils/haptics"; 
-import { DollarSign, FileUp } from "lucide-react";
+import { useTheme } from "./context/ThemeContext";
+
+// Safe haptics that won't crash on unsupported devices
+const safeHaptics = {
+  impact: (style: 'Light' | 'Medium' | 'Heavy') => {
+    try {
+      if (Platform.OS === 'ios') {
+        const Haptics = require('expo-haptics');
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle[style]);
+      }
+    } catch (error) {
+      // Silently fail if haptics not available
+      console.log('Haptics not available');
+    }
+  },
+  notification: (type: 'Success' | 'Warning' | 'Error') => {
+    try {
+      if (Platform.OS === 'ios') {
+        const Haptics = require('expo-haptics');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType[type]);
+      }
+    } catch (error) {
+      console.log('Haptics not available');
+    }
+  },
+};
 
 interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
-  theme?: string;
-  onThemeToggle?: () => void;
+  navigation: any;
 }
 
-export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggle }: SidebarProps) {
-  const navigation = useNavigation();
+export default function Sidebar({ isOpen, onClose, navigation }: SidebarProps) {
   const screenWidth = Dimensions.get("window").width;
   const slideAnim = useRef(new Animated.Value(-screenWidth)).current;
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const [profileName, setProfileName] = useState("User");
   const [profileEmail, setProfileEmail] = useState("");
-  const [isPremium, setIsPremium] = useState(true);
+  const [isPremium, setIsPremium] = useState(false);
   const [notificationsEnabled, setNotificationsEnabled] = useState(true);
+  const [isLoading, setIsLoading] = useState(true);
   
-  const isDark = theme === "dark";
+  // ✅ UNCOMMENTED - This must be active for theme to work
+  const { theme, setTheme, colors } = useTheme();
+  const isDark = theme === 'dark';
+  
   const auth = getAuth();
   const db = getFirestore();
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        let name = user.displayName || user.email?.split("@")[0] || "User";
-        setProfileEmail(user.email || "");
+    let isMounted = true;
 
-        if (!user.displayName) {
-          const docSnap = await getDoc(doc(db, "users", user.uid));
-          if (docSnap.exists()) {
-            const userData = docSnap.data();
-            name = userData.username || name;
-            setIsPremium(userData.isPremium || false);
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!isMounted) return;
+
+      try {
+        if (user) {
+          let name = user.displayName || user.email?.split("@")[0] || "User";
+          setProfileEmail(user.email || "");
+
+          if (!user.displayName) {
+            try {
+              const docSnap = await getDoc(doc(db, "users", user.uid));
+              if (docSnap.exists() && isMounted) {
+                const userData = docSnap.data();
+                name = userData.username || name;
+                setIsPremium(userData.isPremium || false);
+              }
+            } catch (firestoreError) {
+              console.log("Error fetching user data:", firestoreError);
+            }
+          }
+
+          if (isMounted) {
+            setProfileName(name);
           }
         }
-
-        setProfileName(name);
+      } catch (error) {
+        console.log("Auth error:", error);
+      } finally {
+        if (isMounted) {
+          setIsLoading(false);
+        }
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   useEffect(() => {
@@ -113,13 +158,26 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
   }, [isOpen, screenWidth]);
 
   const handleNavigation = (screen: string) => {
-    haptics.impact('Light');
-    navigation.navigate(screen as never);
-    onClose();
+    if (!screen) return;
+    
+    safeHaptics.impact('Light');
+    
+    try {
+      if (navigation?.navigate) {
+        navigation.navigate(screen);
+        onClose();
+      } else {
+        console.log('Navigation not available');
+        Alert.alert('Navigation Error', 'Unable to navigate. Please try again.');
+      }
+    } catch (error) {
+      console.log('Navigation error:', error);
+      Alert.alert('Navigation Error', 'Unable to navigate to this screen.');
+    }
   };
 
   const handleSignOut = () => {
-    haptics.notification('Warning');
+    safeHaptics.notification('Warning');
     Alert.alert(
       "Sign Out",
       "Are you sure you want to sign out?",
@@ -135,8 +193,11 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
             try {
               await signOut(auth);
               onClose();
-              navigation.navigate("LoginScreen" as never);
+              if (navigation?.navigate) {
+                navigation.navigate("LoginScreen");
+              }
             } catch (error) {
+              console.log('Sign out error:', error);
               Alert.alert("Error", "Failed to sign out. Please try again.");
             }
           },
@@ -146,10 +207,9 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
   };
 
   const handleThemeToggle = () => {
-    haptics.impact('Medium');
-    if (onThemeToggle) {
-      onThemeToggle();
-    }
+    safeHaptics.impact('Medium');
+    const newTheme = isDark ? 'light' : 'dark';
+    setTheme(newTheme);
   };
 
   const menuSections = [
@@ -173,10 +233,9 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
       title: "Settings",
       items: [
         { icon: Laptop2, label: "Paired Devices", screen: "PairedDevicesScreen", badge: "2" },
-        { icon: Bell, label: "Notifications", screen: "NotificationsScreen", badge: null,  },
+        { icon: Bell, label: "Notifications", screen: "NotificationsScreen", badge: null },
         { icon: isDark ? Sun : Moon, label: "Dark Mode", screen: "", badge: null, toggle: true, isTheme: true },
         { icon: Shield, label: "Privacy", screen: "PrivacyScreen", badge: null },
-        
       ],
     },
     {
@@ -195,29 +254,36 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
     return name.substring(0, 2).toUpperCase();
   };
 
+  if (!isOpen) return null;
+
   return (
     <>
       {/* Overlay */}
-      {isOpen && (
-        <Animated.View 
-          style={[
-            styles.overlay, 
-            { opacity: fadeAnim.interpolate({ inputRange: [0, 1], outputRange: [0, 0.5] }) }
-          ]}
-        >
-          <TouchableOpacity 
-            style={StyleSheet.absoluteFill} 
-            onPress={onClose}
-            activeOpacity={1}
-          />
-        </Animated.View>
-      )}
+      <Animated.View 
+        style={[
+          styles.overlay, 
+          { 
+            opacity: fadeAnim.interpolate({ 
+              inputRange: [0, 1], 
+              outputRange: [0, 0.5] 
+            }) 
+          }
+        ]}
+      >
+        <TouchableOpacity 
+          style={StyleSheet.absoluteFill} 
+          onPress={onClose}
+          activeOpacity={1}
+        />
+      </Animated.View>
 
       <Animated.View 
         style={[
-          styles.sidebar, 
-          isDark ? styles.sidebarDark : styles.sidebarLight,
-          { transform: [{ translateX: slideAnim }] }
+          styles.sidebar,
+          { 
+            backgroundColor: colors.surface || colors.card,
+            transform: [{ translateX: slideAnim }] 
+          }
         ]}
       >
         {/* Gradient Header */}
@@ -270,7 +336,7 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.menuScrollContent}
         >
-          {menuSections.map((section, sectionIndex) => (
+          {menuSections.map((section) => (
             <Animated.View 
               key={section.title}
               style={[
@@ -286,22 +352,22 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
                 },
               ]}
             >
-              <Text style={[styles.sectionTitle, isDark && styles.sectionTitleDark]}>
+              <Text style={[styles.sectionTitle, { color: colors.subtext }]}>
                 {section.title}
               </Text>
               
-              {section.items.map((item, index) => (
+              {section.items.map((item) => (
                 <Fragment key={item.label}>
                   {item.toggle ? (
-                    <View style={[styles.menuItem, isDark && styles.menuItemDark]}>
+                    <View style={[styles.menuItem, { backgroundColor: colors.card }]}>
                       <View style={styles.menuItemLeft}>
-                        <View style={[styles.iconContainer, isDark && styles.iconContainerDark]}>
+                        <View style={[styles.iconContainer, { backgroundColor: isDark ? '#374151' : '#FFFFFF' }]}>
                           <item.icon 
                             size={20} 
-                            color={isDark ? "#9CA3AF" : "#6B7280"} 
+                            color={colors.subtext} 
                           />
                         </View>
-                        <Text style={[styles.menuItemText, isDark && styles.menuItemTextDark]}>
+                        <Text style={[styles.menuItemText, { color: colors.text }]}>
                           {item.label}
                         </Text>
                       </View>
@@ -309,7 +375,7 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
                       <Switch
                         value={item.isTheme ? isDark : notificationsEnabled}
                         onValueChange={item.isTheme ? handleThemeToggle : setNotificationsEnabled}
-                        trackColor={{ false: "#D1D5DB", true: "#9B5DE5" }}
+                        trackColor={{ false: "#D1D5DB", true: colors.primary }}
                         thumbColor="#FFFFFF"
                         ios_backgroundColor="#D1D5DB"
                       />
@@ -317,17 +383,18 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
                   ) : (
                     <TouchableOpacity
                       onPress={() => item.screen ? handleNavigation(item.screen) : null}
-                      style={[styles.menuItem, isDark && styles.menuItemDark]}
+                      style={[styles.menuItem, { backgroundColor: colors.card }]}
                       activeOpacity={0.7}
+                      disabled={!item.screen}
                     >
                       <View style={styles.menuItemLeft}>
-                        <View style={[styles.iconContainer, isDark && styles.iconContainerDark]}>
+                        <View style={[styles.iconContainer, { backgroundColor: isDark ? '#374151' : '#FFFFFF' }]}>
                           <item.icon 
                             size={20} 
-                            color={isDark ? "#9CA3AF" : "#6B7280"} 
+                            color={colors.subtext} 
                           />
                         </View>
-                        <Text style={[styles.menuItemText, isDark && styles.menuItemTextDark]}>
+                        <Text style={[styles.menuItemText, { color: colors.text }]}>
                           {item.label}
                         </Text>
                       </View>
@@ -336,14 +403,14 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
                         {item.badge && (
                           <View style={[
                             styles.badge,
-                            item.badge === "PRO" && styles.badgePro
+                            { backgroundColor: item.badge === "PRO" ? (colors.warning || '#F59E0B') : colors.primary }
                           ]}>
                             <Text style={styles.badgeText}>{item.badge}</Text>
                           </View>
                         )}
                         <ChevronRight 
                           size={18} 
-                          color={isDark ? "#4B5563" : "#D1D5DB"} 
+                          color={colors.border} 
                         />
                       </View>
                     </TouchableOpacity>
@@ -356,7 +423,7 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
           {/* Sign Out Button */}
           <TouchableOpacity
             onPress={handleSignOut}
-            style={[styles.signOutButton]}
+            style={styles.signOutButton}
             activeOpacity={0.8}
           >
             <LinearGradient
@@ -371,11 +438,11 @@ export default function Sidebar({ isOpen, onClose, theme = "light", onThemeToggl
           </TouchableOpacity>
 
           {/* Footer */}
-          <View style={styles.footer}>
-            <Text style={[styles.footerText, isDark && styles.footerTextDark]}>
+          <View style={[styles.footer, { borderTopColor: colors.border }]}>
+            <Text style={[styles.footerText, { color: colors.subtext }]}>
               Note Tedd v1.0.0
             </Text>
-            <Text style={[styles.footerSubtext, isDark && styles.footerSubtextDark]}>
+            <Text style={[styles.footerSubtext, { color: colors.subtext }]}>
               Made with ❤️ for students
             </Text>
           </View>
@@ -399,20 +466,20 @@ const styles = StyleSheet.create({
     width: "85%",
     maxWidth: 320,
     zIndex: 1000,
-    elevation: 20,
-    shadowColor: "#000",
-    shadowOffset: { width: -2, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-  },
-  sidebarLight: {
-    backgroundColor: "#FFFFFF",
-  },
-  sidebarDark: {
-    backgroundColor: "#1F2937",
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: -2, height: 0 },
+        shadowOpacity: 0.3,
+        shadowRadius: 12,
+      },
+      android: {
+        elevation: 20,
+      },
+    }),
   },
   header: {
-    paddingTop: 60,
+    paddingTop: Platform.OS === 'ios' ? 60 : 50,
     paddingBottom: 24,
     paddingHorizontal: 20,
     position: "relative",
@@ -456,11 +523,17 @@ const styles = StyleSheet.create({
     borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#000",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
   },
   profileIconText: {
     color: "#fff",
@@ -511,14 +584,10 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 12,
     fontWeight: "700",
-    color: "#9CA3AF",
     textTransform: "uppercase",
     letterSpacing: 1,
     marginBottom: 12,
     marginLeft: 12,
-  },
-  sectionTitleDark: {
-    color: "#6B7280",
   },
   menuItem: {
     flexDirection: "row",
@@ -528,10 +597,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     borderRadius: 12,
     marginBottom: 4,
-    backgroundColor: "#F9FAFB",
-  },
-  menuItemDark: {
-    backgroundColor: "rgba(55, 65, 81, 0.5)",
   },
   menuItemLeft: {
     flexDirection: "row",
@@ -542,21 +607,13 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: "#FFFFFF",
     justifyContent: "center",
     alignItems: "center",
     marginRight: 12,
   },
-  iconContainerDark: {
-    backgroundColor: "#374151",
-  },
   menuItemText: {
     fontSize: 15,
-    color: "#1F2937",
     fontWeight: "500",
-  },
-  menuItemTextDark: {
-    color: "#E5E7EB",
   },
   menuItemRight: {
     flexDirection: "row",
@@ -564,13 +621,9 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   badge: {
-    backgroundColor: "#9B5DE5",
     paddingHorizontal: 8,
     paddingVertical: 2,
     borderRadius: 10,
-  },
-  badgePro: {
-    backgroundColor: "#F59E0B",
   },
   badgeText: {
     color: "#fff",
@@ -582,11 +635,17 @@ const styles = StyleSheet.create({
     marginBottom: 24,
     borderRadius: 12,
     overflow: "hidden",
-    elevation: 4,
-    shadowColor: "#EF4444",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.3,
-    shadowRadius: 4,
+    ...Platform.select({
+      ios: {
+        shadowColor: "#EF4444",
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.3,
+        shadowRadius: 4,
+      },
+      android: {
+        elevation: 4,
+      },
+    }),
   },
   signOutGradient: {
     flexDirection: "row",
@@ -605,22 +664,13 @@ const styles = StyleSheet.create({
     paddingTop: 16,
     paddingBottom: 8,
     borderTopWidth: 1,
-    borderTopColor: "#E5E7EB",
   },
   footerText: {
-    color: "#9CA3AF",
     fontSize: 12,
     fontWeight: "500",
   },
-  footerTextDark: {
-    color: "#6B7280",
-  },
   footerSubtext: {
-    color: "#D1D5DB",
     fontSize: 11,
     marginTop: 4,
-  },
-  footerSubtextDark: {
-    color: "#4B5563",
   },
 });

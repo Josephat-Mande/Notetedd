@@ -11,6 +11,7 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useTheme } from './context/ThemeContext';
 
 const SUBSCRIPTION_PLANS = [
   { id: 'monthly', name: 'Monthly', price: 299, period: 'month' },
@@ -32,6 +33,8 @@ export default function PaymentMethodsScreen() {
   const [cardExpiry, setCardExpiry] = useState('');
   const [cardCVV, setCardCVV] = useState('');
   const [cardName, setCardName] = useState('');
+
+  const { theme, colors } = useTheme();
 
   const selectedPlanDetails = SUBSCRIPTION_PLANS.find(p => p.id === selectedPlan);
 
@@ -196,17 +199,17 @@ export default function PaymentMethodsScreen() {
   };
 
   return (
-    <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+    <ScrollView style={[styles.container, { backgroundColor: colors.background }]} showsVerticalScrollIndicator={false}>
       {/* Header */}
       <View style={styles.header}>
-        <MaterialIcons name="credit-card" size={48} color="#7c3aed" />
-        <Text style={styles.title}>Subscribe to Premium</Text>
-        <Text style={styles.subtitle}>Choose your plan and payment method</Text>
+        <MaterialIcons name="credit-card" size={48} color={colors.primary} />
+        <Text style={[styles.title, { color: colors.primary }]}>Subscribe to Premium</Text>
+        <Text style={[styles.subtitle, { color: colors.subtext }]}>Choose your plan and payment method</Text>
       </View>
 
       {/* Subscription Plans */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Select Plan</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Select Plan</Text>
         {SUBSCRIPTION_PLANS.map((plan) => (
           <TouchableOpacity
             key={plan.id}
@@ -252,7 +255,7 @@ export default function PaymentMethodsScreen() {
 
       {/* Payment Methods */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Payment Method</Text>
+        <Text style={[styles.sectionTitle, { color: colors.text }]}>Payment Method</Text>
         {paymentMethods.map((method) => (
           <TouchableOpacity
             key={method.id}

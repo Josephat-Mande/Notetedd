@@ -37,11 +37,12 @@ import {
 import DevicePermissions from './utils/devicePermissions';
 import QRCodeScanner from '../components/QRCodeScanner';
 import BackButton from "../components/Backbutton";
+import { useTheme } from "./context/ThemeContext";
 
 const { width, height } = Dimensions.get("window");
 
 export default function PairedDevicesScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
   
   const auth = getAuth();

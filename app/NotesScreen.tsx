@@ -21,6 +21,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import haptics from "./utils/haptics";
 import { getFirestore, collection, query, where, orderBy, getDocs, doc, updateDoc, getDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+import { useTheme } from "./context/ThemeContext";
+
 
 const { width, height } = Dimensions.get("window");
 
@@ -31,7 +33,7 @@ const GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1/models/gemi
 const GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions";
 
 export default function EnhancedNotesScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
 
   // Check if navigated with specific lecture

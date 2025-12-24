@@ -14,6 +14,7 @@ import {
   Image,
 } from "react-native";
 import { MaterialIcons } from "@expo/vector-icons";
+import { useTheme } from './context/ThemeContext';
 import * as WebBrowser from "expo-web-browser";
 import * as AuthSession from "expo-auth-session";
 import { Platform } from "react-native";
@@ -54,6 +55,8 @@ export default function SyncClassroomScreen({ navigation }) {
   const [processingProgress, setProcessingProgress] = useState("");
   const [userEmail, setUserEmail] = useState("");
   const [showRedirectInfo, setShowRedirectInfo] = useState(false);
+
+  const { theme, colors } = useTheme();
 
   // Gemini API Configuration
   const GEMINI_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI";
@@ -484,15 +487,13 @@ Format as clean, readable plain text suitable for students.`;
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: colors.background }] }>
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
-          <MaterialIcons name="school" size={48} color="#7c3aed" />
-          <Text style={styles.title}>Google Classroom Sync 📚</Text>
-          <Text style={styles.description}>
-            Connect your Google Classroom and import course materials as organized study notes.
-          </Text>
+          <MaterialIcons name="school" size={48} color={colors.primary} />
+          <Text style={[styles.title, { color: colors.text }]}>Google Classroom Sync 📚</Text>
+          <Text style={[styles.description, { color: colors.subtext }]}>Connect your Google Classroom and import course materials as organized study notes.</Text>
         </View>
 
         {/* Authentication Section */}

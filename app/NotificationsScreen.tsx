@@ -13,9 +13,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import haptics from "./utils/haptics";
 import BackButton from "../components/Backbutton";
+import { useTheme } from "./context/ThemeContext";
 
 export default function NotificationsScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
   
   const [notifications, setNotifications] = useState([

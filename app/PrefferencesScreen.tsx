@@ -2,29 +2,30 @@
 import React, { useState } from "react";
 import { View, Text, StyleSheet, Switch, Alert } from "react-native";
 import { Settings } from "lucide-react";
+import { useTheme } from "./context/ThemeContext";
 
 export default function PrefferencesScreen() {
   const [prefA, setPrefA] = useState(false);
   const [prefB, setPrefB] = useState(true);
+  const { colors } = useTheme();
 
   const handleSave = () => {
     Alert.alert("Preferences", "Preferences updated successfully!");
-    // Implement any logic to save these preferences (e.g., update Firestore or AsyncStorage)
   };
 
   return (
-    <View style={styles.container}>
-      <Settings size={40} color="#7c3aed" />
-      <Text style={styles.title}>Preferences</Text>
+    <View style={[styles.container, { backgroundColor: colors.background }] }>
+      <Settings size={40} color={colors.primary} />
+      <Text style={[styles.title, { color: colors.text }]}>Preferences</Text>
       <View style={styles.preferenceItem}>
-        <Text style={styles.label}>Preference A</Text>
+        <Text style={[styles.label, { color: colors.text }]}>Preference A</Text>
         <Switch value={prefA} onValueChange={setPrefA} />
       </View>
       <View style={styles.preferenceItem}>
-        <Text style={styles.label}>Preference B</Text>
+        <Text style={[styles.label, { color: colors.text }]}>Preference B</Text>
         <Switch value={prefB} onValueChange={setPrefB} />
       </View>
-      <Text style={styles.saveText} onPress={handleSave}>
+      <Text style={[styles.saveText, { color: colors.primary }]} onPress={handleSave}>
         Save Preferences
       </Text>
     </View>

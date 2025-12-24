@@ -18,6 +18,7 @@ import * as ImagePicker from "expo-image-picker";
 import { MaterialIcons } from "@expo/vector-icons";
 import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system";
+import { useTheme } from './context/ThemeContext';
 
 // Firebase imports
 import { db, auth } from '../firebaseConfig';
@@ -33,6 +34,8 @@ export default function UploadPDFScreen({ navigation }) {
   const [processingProgress, setProcessingProgress] = useState("");
   const [noteTitle, setNoteTitle] = useState("");
   const fileInputRef = useRef(null);
+
+  const { theme, colors } = useTheme();
 
   // Gemini API Configuration
   const GEMINI_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI";
@@ -65,12 +68,6 @@ export default function UploadPDFScreen({ navigation }) {
     try {
       if (Platform.OS === "web" && fromCamera) {
         Alert.alert("Not Available", "Camera is not available on web. Please use gallery or file upload.");
-        return;
-      }
-
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert("Permission Denied", "We need camera roll permissions.");
         return;
       }
 

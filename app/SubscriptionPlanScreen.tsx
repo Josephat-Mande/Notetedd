@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from "react";
+import { useTheme } from "./context/ThemeContext";
 import {
   View,
   Text,
@@ -14,7 +15,7 @@ import haptics from "./utils/haptics";
 import BackButton from "../components/Backbutton";
 
 export default function SubscriptionPlanScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
   
   const [selectedPlan, setSelectedPlan] = useState("monthly");

@@ -18,13 +18,14 @@ import { Audio } from 'expo-av';
 import * as Speech from 'expo-speech';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import haptics from "./utils/haptics";
+import { useTheme } from "./context/ThemeContext";
 import { getFirestore, collection, query, where, orderBy, getDocs } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
 const GOOGLE_TTS_API_KEY = "AIzaSyCZVQqMteS8jSA_cAYOUS0XxzwHxzgIaNI";
 
 export default function AudioNotesScreen({ navigation, route }) {
-  const theme = route?.params?.theme || "light";
+  const { theme, colors } = useTheme();
   const isDark = theme === "dark";
 
   // Screen state

@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   ScrollView,
-  useColorScheme,
   Dimensions,
   Modal,
   Animated,
@@ -36,11 +35,14 @@ import * as BackgroundFetch from "expo-background-fetch";
 import * as TaskManager from "expo-task-manager";
 import { Audio } from "expo-av";
 import Sidebar from "./Sidebar";
+import { useSidebar } from "./hooks/useSidebar";
+
 
 // Import widgets
 import StudyAnalyticsWidget from "../components/widgets/StudyAnalyticsWidget";
 import PomodoroTimerWidget from "../components/widgets/PomodoroTimerWidget";
 import AchievementModal from "../components/widgets/AchievementModal";
+import { useTheme } from "./context/ThemeContext";
 
 // Background task for Pomodoro timer
 const POMODORO_TASK_NAME = "POMODORO_BACKGROUND_TASK";
@@ -97,15 +99,16 @@ TaskManager.defineTask(POMODORO_TASK_NAME, async () => {
 });
 
 export default function HomeScreen() {
+  const { isOpen, openSidebar, closeSidebar } = useSidebar();
   const navigation = useNavigation();
   const auth = getAuth();
   const db = getFirestore();
   
   const [fullName, setFullName] = useState("User");
-  const systemScheme = useColorScheme();
-  const [theme, setTheme] = useState(systemScheme || "light");
+  const { theme, setTheme, colors } = useTheme();
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [loading, setLoading] = useState(true);
+  
   
   // Real Data State
   const [streakCount, setStreakCount] = useState(0);
@@ -168,7 +171,7 @@ export default function HomeScreen() {
       Notifications.addNotificationResponseReceivedListener(response => {
         console.log("Notification tapped:", response);
         // Navigate to home or pomodoro timer when notification is tapped
-        navigation.navigate("Home");
+        navigation.navigate("HomeScreen");
       });
     } catch (error) {
       console.error("Notification setup error:", error);
@@ -567,7 +570,7 @@ export default function HomeScreen() {
       const querySnapshot = await getDocs(q);
       
       const lectures = [];
-      const colors = ["#9B5DE5", "#00B4D8", "#FF006E", "#FFD93D", "#10B981"];
+      const paletteColors = ["#9B5DE5", "#00B4D8", "#FF006E", "#FFD93D", "#10B981"];
 
       querySnapshot.forEach((doc, index) => {
         const data = doc.data();
@@ -590,7 +593,7 @@ export default function HomeScreen() {
             duration: `${duration} mins`,
             date: timeAgo,
             progress: progress,
-            color: colors[index % colors.length],
+            color: paletteColors[index % paletteColors.length],
             topic: data.organizedNotes.keyPoints?.[0]?.substring(0, 50) || "General Topic",
           });
         }
@@ -640,7 +643,8 @@ export default function HomeScreen() {
       "Knowledge is power! 💪",
       "You're doing amazing! ⭐",
       "Keep the momentum going! 🔥",
-      "Learning never stops! 📚"
+      "Learning never stops! 📚",
+      "Stay curious, stay motivated! 🌟",
     ];
     const hour = new Date().getHours();
     return quotes[hour % quotes.length];
@@ -817,7 +821,8 @@ export default function HomeScreen() {
   };
 
   const toggleTheme = () => {
-    setTheme((prev) => (prev === "light" ? "dark" : "light"));
+    const newTheme = theme === "light" ? "dark" : "light";
+    setTheme(newTheme);
   };
 
   const toggleSidebar = () => {
@@ -877,9 +882,9 @@ export default function HomeScreen() {
   // ==================== MAIN RENDER ====================
   return (
     <View style={[styles.container, isDark ? styles.darkBg : styles.lightBg]}>
-      <StatusBar 
-        barStyle="light-content" 
-        backgroundColor="transparent"
+      <StatusBar
+        barStyle={theme === 'dark' ? 'light-content' : 'dark-content'}
+        backgroundColor={colors.background}
         translucent
       />
       
@@ -1217,6 +1222,7 @@ export default function HomeScreen() {
             isOpen={isSidebarOpen} 
             onClose={toggleSidebar} 
             theme={theme}
+            navigation={navigation}
             onThemeToggle={toggleTheme}
           />
         </TouchableOpacity>
