@@ -15,6 +15,7 @@ import MaterialIcons from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import haptics from "./utils/haptics";
 import { getFirestore, collection, query, where, orderBy, getDocs, doc, updateDoc } from "firebase/firestore";
+import { logUserActivity } from './utils/userActivity';
 import { getAuth } from "firebase/auth";
 
 // ==================== API KEYS ====================
@@ -400,6 +401,15 @@ Create 10-15 diverse questions covering all main topics. Mix conceptual, factual
     const total = currentQuestions.length;
     const percentage = Math.round((completed / total) * 100);
     setScore({ completed, total, percentage });
+    // Log quiz completion activity (counts towards streak)
+    try {
+      const currentUser = auth.currentUser;
+      if (currentUser && completed > 0) {
+        logUserActivity(db, currentUser.uid, 'quiz', { completed, total, percentage }).catch(() => {});
+      }
+    } catch (err) {
+      console.warn('Failed to log quiz activity:', err);
+    }
   };
 
   const handleBackToList = async () => {

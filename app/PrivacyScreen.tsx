@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import BackButton from '../components/Backbutton';
 
 export default function PrivacyScreen() {
   return (
@@ -11,6 +12,7 @@ export default function PrivacyScreen() {
         color="#7c3aed" 
         style={styles.icon} 
       />
+      <BackButton />
       <Text style={styles.title}>Privacy Policy</Text>
       <Text style={styles.subtitle}>Last Updated: December 2025</Text>
       
@@ -110,8 +112,8 @@ export default function PrivacyScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>8. Children's Privacy</Text>
         <Text style={styles.content}>
-          NotedEd is intended for users aged 13 and older. We do not knowingly 
-          collect personal information from children under 13. If we learn we have 
+          Notetedd is intended for users aged 18 and older. We do not knowingly 
+          collect personal information from children under 18. If we learn we have 
           collected such information, we will take steps to delete it promptly.
         </Text>
       </View>
@@ -129,7 +131,7 @@ export default function PrivacyScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>10. International Data Transfers</Text>
         <Text style={styles.content}>
-          Your information may be transferred to and processed in countries other 
+          Your information, specifically lecture recordings, may be transferred to and processed in countries other 
           than your own. We ensure appropriate safeguards are in place to protect 
           your data in compliance with applicable data protection laws, including 
           GDPR and CCPA.
@@ -163,9 +165,9 @@ export default function PrivacyScreen() {
           If you have questions or concerns about this Privacy Policy:{'\n\n'}
           Email: notetedd@gmail.com{'\n'}
           Phone: +254 704697508{'\n'}
-          Address: Notetedd, Sillicon Savanna -Kenya{'\n'}
+          Address: Notetedd, Nairobi -Kenya{'\n'}
           Website: www.noteded.com/privacy{'\n\n'}
-          For data subject requests, please use: datarequests@notededd.com
+          For data subject requests, please email: notetedd@gmail.com
         </Text>
       </View>
 

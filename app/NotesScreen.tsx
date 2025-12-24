@@ -22,6 +22,7 @@ import haptics from "./utils/haptics";
 import { getFirestore, collection, query, where, orderBy, getDocs, doc, updateDoc, getDoc } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { useTheme } from "./context/ThemeContext";
+import { logUserActivity } from "./utils/userActivity";
 
 
 const { width, height } = Dimensions.get("window");
@@ -77,6 +78,7 @@ export default function EnhancedNotesScreen({ navigation, route }) {
   // Firebase instances
   const auth = getAuth();
   const db = getFirestore();
+  const readStartRef = useRef(null);
 
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -114,6 +116,38 @@ export default function EnhancedNotesScreen({ navigation, route }) {
       generateFlashcards();
       setEditedNotes(notes);
     }
+  }, [notes]);
+
+  // Track how long user views/reads the notes. If >= 10 minutes, log a 'note_read' activity.
+  useEffect(() => {
+    if (notes) {
+      readStartRef.current = Date.now();
+      console.log('🕒 Note read timer started');
+    }
+
+    return () => {
+      try {
+        if (readStartRef.current) {
+          const elapsed = Date.now() - readStartRef.current;
+          const TEN_MINUTES = 10 * 60 * 1000;
+          console.log('🕒 Note read timer stopped, elapsed ms:', elapsed);
+          if (elapsed >= TEN_MINUTES) {
+            const currentUser = auth.currentUser;
+            if (currentUser) {
+              logUserActivity(db, currentUser.uid, 'note_read', {
+                recordingId: currentRecordingId,
+                durationMs: elapsed,
+              });
+              console.log('✅ Logged note_read activity');
+            }
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to log note_read activity:', err);
+      } finally {
+        readStartRef.current = null;
+      }
+    };
   }, [notes]);
 
   // ==================== LOAD SPECIFIC LECTURE ====================

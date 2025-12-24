@@ -14,6 +14,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import MaterialIcons from "react-native-vector-icons/MaterialIcons";
 import haptics from "./utils/haptics";
 import { useTheme } from "./context/ThemeContext";
+import BackButton from "../components/Backbutton";
 
 export default function HelpSupportScreen({ navigation, route }) {
   const { theme, colors } = useTheme();
@@ -110,7 +111,7 @@ export default function HelpSupportScreen({ navigation, route }) {
       title: "Community Forum",
       subtitle: "Get help from other students",
       color: "#F59E0B",
-      action: () => Linking.openURL("https://community.notetedd.com"),
+      action: () => Linking.openURL("https://discord.gg/axt3G9T8"),
     },
   ];
 
@@ -145,12 +146,7 @@ export default function HelpSupportScreen({ navigation, route }) {
         colors={isDark ? ["#1F2937", "#374151"] : ["#9B5DE5", "#7C3AED"]}
         style={styles.header}
       >
-        <TouchableOpacity 
-          style={styles.backButton} 
-          onPress={() => navigation.goBack()}
-        >
-          <MaterialIcons name="arrow-back" size={24} color="#fff" />
-        </TouchableOpacity>
+        <BackButton />
         
         <Text style={styles.headerTitle}>Help & Support</Text>
         <View style={{ width: 40 }} />

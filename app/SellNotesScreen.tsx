@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from './context/ThemeContext';
+import BackButton from '../components/Backbutton';
 import { 
   getFirestore, 
   collection, 
@@ -559,6 +560,7 @@ export default function SellNotesScreen() {
           <Text style={[styles.headerTitle, { color: colors.text }]}>Share Notes</Text>
           <Text style={[styles.headerSubtitle, { color: colors.subtext }]}>Select notes to share and earn money</Text>
         </View>
+        <BackButton />
 
         <View style={styles.actionButtons}>
           <TouchableOpacity 

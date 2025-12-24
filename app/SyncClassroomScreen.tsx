@@ -18,6 +18,7 @@ import { useTheme } from './context/ThemeContext';
 import * as WebBrowser from "expo-web-browser";
 import * as AuthSession from "expo-auth-session";
 import { Platform } from "react-native";
+import BackButton from "../components/Backbutton";
 
 // Firebase imports
 import { db, auth } from '../firebaseConfig';
@@ -495,6 +496,7 @@ Format as clean, readable plain text suitable for students.`;
           <Text style={[styles.title, { color: colors.text }]}>Google Classroom Sync 📚</Text>
           <Text style={[styles.description, { color: colors.subtext }]}>Connect your Google Classroom and import course materials as organized study notes.</Text>
         </View>
+        <BackButton />
 
         {/* Authentication Section */}
         {!isAuthenticated ? (

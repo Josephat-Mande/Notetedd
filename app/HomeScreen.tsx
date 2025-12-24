@@ -27,6 +27,8 @@ import {
   doc,
   getDoc,
 } from "firebase/firestore";
+import { collection as collRef, query as qRef, where as whereRef, orderBy as orderByRef, getDocs as getDocsRef } from 'firebase/firestore';
+import { logUserActivity } from './utils/userActivity';
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { LinearGradient } from "expo-linear-gradient";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -126,6 +128,7 @@ export default function HomeScreen() {
   const [pomodoroRunningInBackground, setPomodoroRunningInBackground] = useState(false);
   const appState = useRef(AppState.currentState);
   const soundObject = useRef(null);
+  const notificationResponseListenerRef = useRef(null);
   
   // Animations
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -144,6 +147,9 @@ export default function HomeScreen() {
 
     return () => {
       subscription.remove();
+      if (notificationResponseListenerRef.current) {
+        try { notificationResponseListenerRef.current.remove(); } catch (e) { /* ignore */ }
+      }
       if (soundObject.current) {
         soundObject.current.unloadAsync();
       }
@@ -166,13 +172,30 @@ export default function HomeScreen() {
       }
 
       console.log("✅ Notifications enabled");
+      // Ensure Android channel exists (safe no-op on iOS)
+      try {
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('pomodoro', {
+            name: 'Pomodoro Notifications',
+            importance: Notifications.AndroidImportance.MAX,
+            sound: 'default',
+            vibrationPattern: [0, 250, 250, 250],
+          });
+        }
+      } catch (err) {
+        console.warn('Could not create notification channel:', err);
+      }
 
-      // Listen for notification responses
-      Notifications.addNotificationResponseReceivedListener(response => {
-        console.log("Notification tapped:", response);
-        // Navigate to home or pomodoro timer when notification is tapped
-        navigation.navigate("HomeScreen");
-      });
+      // Listen for notification responses and keep reference for cleanup
+      try {
+        const sub = Notifications.addNotificationResponseReceivedListener(response => {
+          console.log('Notification tapped:', response);
+          try { navigation.navigate('HomeScreen'); } catch (e) { /* ignore */ }
+        });
+        notificationResponseListenerRef.current = sub;
+      } catch (err) {
+        console.warn('Failed to add notification response listener:', err);
+      }
     } catch (error) {
       console.error("Notification setup error:", error);
     }
@@ -225,15 +248,26 @@ export default function HomeScreen() {
   };
 
   const playNotificationSound = async () => {
+    // Avoid trying to play a bundled audio file on Android background threads.
     try {
-      const { sound } = await Audio.Sound.createAsync(
-        require("../assets/notification.mp3"), // Make sure to add a notification sound
-        { shouldPlay: true }
-      );
+      if (Platform.OS === 'android') {
+        // Android will play the notification channel sound; skip explicit audio play to avoid crashes.
+        return;
+      }
+
+      let soundAsset;
+      try {
+        soundAsset = require('../assets/notification.mp3');
+      } catch (err) {
+        console.warn('No bundled notification sound found, skipping audio play.');
+        return;
+      }
+
+      const { sound } = await Audio.Sound.createAsync(soundAsset, { shouldPlay: true });
       soundObject.current = sound;
       await sound.playAsync();
     } catch (error) {
-      console.error("Error playing sound:", error);
+      console.error('Error playing sound:', error);
     }
   };
 
@@ -366,6 +400,28 @@ export default function HomeScreen() {
           activityDays.add(dayKey);
         }
       });
+
+      // Also include explicit user activity events (audio_play, note_read, quiz)
+      try {
+        const actsRef = collection(db, 'userActivities');
+        const actsQ = query(
+          actsRef,
+          where('userId', '==', currentUser.uid),
+          orderBy('createdAt', 'desc')
+        );
+
+        const actsSnap = await getDocs(actsQ);
+        actsSnap.forEach((aDoc) => {
+          const d = aDoc.data();
+          if (d.createdAt && d.type) {
+            const date = d.createdAt.toDate();
+            const dayKey = `${date.getFullYear()}-${date.getMonth()}-${date.getDate()}`;
+            activityDays.add(dayKey);
+          }
+        });
+      } catch (err) {
+        console.warn('Could not include userActivities in streak calc:', err);
+      }
 
       // Calculate streak
       const sortedDays = Array.from(activityDays).sort().reverse();
@@ -757,16 +813,24 @@ export default function HomeScreen() {
     setShowAchievement(true);
     
     // Send notification
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: sessionType === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
-        body: sessionType === "work" 
-          ? "Great job! Time for a well-deserved break." 
-          : "Break's over. Ready to focus again?",
-        sound: true,
-      },
-      trigger: null,
-    });
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: sessionType === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
+          body: sessionType === "work" 
+            ? "Great job! Time for a well-deserved break." 
+            : "Break's over. Ready to focus again?",
+        },
+        trigger: null,
+        android: {
+          channelId: 'pomodoro',
+          sound: 'default',
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+        },
+      });
+    } catch (err) {
+      console.warn('Failed to schedule completion notification:', err);
+    }
     
     // Refresh stats
     loadStats();
@@ -784,30 +848,42 @@ export default function HomeScreen() {
     
     const endTime = Date.now() + (duration * 60 * 1000);
     
-    // Save state for background tracking
-    await AsyncStorage.setItem("pomodoroState", JSON.stringify({
-      isActive: true,
-      type: type,
-      duration: duration,
-      endTime: endTime,
-      timeLeft: duration * 60,
-    }));
-    
-    setPomodoroRunningInBackground(true);
-    
+          await Notifications.scheduleNotificationAsync({
+            content: {
+              title: state.type === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
+              body: state.type === "work" 
+                ? "Great job! Time for a break." 
+                : "Break's over. Ready to focus?",
+              // For Android use channelId below
+            },
+            trigger: null, // Show immediately
+            android: {
+              channelId: 'pomodoro',
+              sound: 'default',
+              priority: Notifications.AndroidNotificationPriority.HIGH,
+            },
+          });
     // Schedule notification for when timer completes
-    await Notifications.scheduleNotificationAsync({
-      content: {
-        title: type === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
-        body: type === "work" 
-          ? "Great job! Time for a break." 
-          : "Break's over. Ready to focus?",
-        sound: true,
-      },
-      trigger: {
-        seconds: duration * 60,
-      },
-    });
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: type === "work" ? "Work Session Complete! 🎉" : "Break Over! 💪",
+          body: type === "work" 
+            ? "Great job! Time for a break." 
+            : "Break's over. Ready to focus?",
+        },
+        trigger: {
+          seconds: duration * 60,
+        },
+        android: {
+          channelId: 'pomodoro',
+          sound: 'default',
+          priority: Notifications.AndroidNotificationPriority.HIGH,
+        },
+      });
+    } catch (err) {
+      console.warn('Failed to schedule start notification:', err);
+    }
   };
 
   const handlePomodoroPause = async () => {
@@ -864,6 +940,15 @@ export default function HomeScreen() {
 
   const { height } = Dimensions.get("window");
   const isDark = theme === "dark";
+
+  const getStreakGradient = (count) => {
+    if (!count) return ['#FFD700', '#FFA500'];
+    if (count < 10) return ['#FFD700', '#FFC107'];
+    if (count < 25) return ['#FF8A00', '#FF6B6B'];
+    if (count < 50) return ['#9B5DE5', '#7C3AED'];
+    if (count < 100) return ['#10B981', '#059669'];
+    return ['#F59E0B', '#D97706'];
+  };
 
   // ==================== LOADING STATE ====================
   if (loading) {
@@ -945,10 +1030,10 @@ export default function HomeScreen() {
                   { transform: [{ scale: pulseAnim }] }
                 ]}
               >
-                <LinearGradient
-                  colors={["#FFD700", "#FFA500"]}
-                  style={styles.streakGradient}
-                >
+                    <LinearGradient
+                      colors={getStreakGradient(streakCount)}
+                      style={styles.streakGradient}
+                    >
                   <MaterialIcons name="local-fire-department" size={24} color="#fff" />
                   <Text style={styles.streakNumber}>{streakCount}</Text>
                   <Text style={styles.streakLabel}>day streak</Text>

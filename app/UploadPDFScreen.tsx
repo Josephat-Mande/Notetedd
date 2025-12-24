@@ -19,10 +19,12 @@ import { MaterialIcons } from "@expo/vector-icons";
 import { Platform } from "react-native";
 import * as FileSystem from "expo-file-system";
 import { useTheme } from './context/ThemeContext';
+import BackButton from "../components/Backbutton";
 
 // Firebase imports
 import { db, auth } from '../firebaseConfig';
 import { collection, addDoc, getDocs, updateDoc, doc, query, where, serverTimestamp } from 'firebase/firestore';
+import { AlignLeft } from "lucide-react-native";
 
 export default function UploadPDFScreen({ navigation }) {
   const [uploads, setUploads] = useState([]);
@@ -571,12 +573,15 @@ Format as clean, readable plain text.`;
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {/* Header */}
         <View style={styles.header}>
+          
           <MaterialIcons name="auto-awesome" size={48} color="#7c3aed" />
           <Text style={styles.title}>From Image to Notes 📸</Text>
           <Text style={styles.description}>
             Upload whiteboard photos, diagrams, or documents. AI will analyze and generate organized study notes.
           </Text>
+          
         </View>
+        <BackButton style={{ AlignLeft }} color="#7c3aed" />
 
         {/* Upload Buttons */}
         <View style={styles.buttonContainer}>

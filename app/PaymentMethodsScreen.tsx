@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { useTheme } from './context/ThemeContext';
+import BackButton from '../components/Backbutton';
 
 const SUBSCRIPTION_PLANS = [
   { id: 'monthly', name: 'Monthly', price: 299, period: 'month' },
@@ -206,6 +207,7 @@ export default function PaymentMethodsScreen() {
         <Text style={[styles.title, { color: colors.primary }]}>Subscribe to Premium</Text>
         <Text style={[styles.subtitle, { color: colors.subtext }]}>Choose your plan and payment method</Text>
       </View>
+      <BackButton />
 
       {/* Subscription Plans */}
       <View style={styles.section}>

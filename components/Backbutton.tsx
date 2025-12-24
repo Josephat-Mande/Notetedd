@@ -17,7 +17,7 @@ export default function BackButton() {
 
   return (
     <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-      <Ionicons name="arrow-back" size={28} color="#fff" />
+      <Ionicons name="arrow-back" size={28} color="#7caed" />
     </TouchableOpacity>
   );
 }
