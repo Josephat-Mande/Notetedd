@@ -297,7 +297,7 @@ const OnboardingScreen = () => {
             activeOpacity={0.85}
           >
             <Text style={styles.getStartedText}>Get Started</Text>
-            {/* <Zap size={22} color="#000" fill="#000" style={{ marginLeft: 8 }} /> */}
+            
           </TouchableOpacity>
         )}
       </View>
