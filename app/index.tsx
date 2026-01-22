@@ -57,7 +57,7 @@ const OnboardingScreen = () => {
       id: '1',
       title: 'Record & Transcribe',
       subtitle: 'Never Miss a Beat',
-      description: 'Transform lectures into text instantly. Speak, and watch your notes write themselves.',
+      description: 'Transform lectures into text instantly. Attend lectures, and watch your notes write themselves.',
       accentColor: '#e67e22',
       imageEmoji: '🎙️',
       decorEmojis: ['🎵', '📝', '✨'],
